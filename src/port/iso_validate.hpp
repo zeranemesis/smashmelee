@@ -28,6 +28,8 @@ struct VerificationStatus {
 
 struct DiscInfo {
     bool isPal = false;
+    uint8_t discNumber = 0;
+    uint8_t discRevision = 0;
 };
 
 ValidationError inspect(const char* path, DiscInfo& info);

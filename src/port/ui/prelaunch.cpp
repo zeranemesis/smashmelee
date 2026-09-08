@@ -47,8 +47,8 @@ namespace {
     <content id="root" open>
         <menu>
             <hero class="intro-item delay-0">
-                <div class="eyebrow"><span>Mario Party R&D</span> presents</div>
-                <img src="res/logo.png" />
+                <div class="eyebrow"><span>MELEE BOARD</span> native PC port</div>
+                <div class="wordmark">SUPER SMASH BROS. MELEE</div>
             </hero>
             <div id="menu-list" />
         </menu>
@@ -213,11 +213,11 @@ namespace {
             case iso::ValidationError::InvalidImage:
                 return "The selected file is not a valid disc image.";
             case iso::ValidationError::WrongGame:
-                return "The selected game is not supported by Party Board.";
+                return "The selected game is not Super Smash Bros. Melee (GALE01).";
             case iso::ValidationError::WrongVersion:
-                return "Party Board currently supports GameCube USA Rev 0 disc images only.";
+                return "Melee Board currently supports the USA GALE01 revision 2 (v1.02) disc only.";
             case iso::ValidationError::Canceled:
-                return "Disc verification was canceled. Party Board cannot guarantee the selected disc image "
+                return "Disc verification was canceled. Melee Board cannot guarantee the selected disc image "
                        "is compatible.";
             case iso::ValidationError::HashMismatch:
                 return "The selected disc image did not pass hash verification. It may be corrupt or "
@@ -268,7 +268,7 @@ namespace {
             return;
         }
 
-        if (result.validation == iso::ValidationError::Success) {
+        if (result.validation == iso::ValidationError::Success || result.validation == iso::ValidationError::Unknown) {
             apply_valid_disc_result(result.path, result.info, result.validation);
             state.errorString.clear();
             state.pendingDiscPath.clear();
@@ -792,8 +792,11 @@ void Prelaunch::update()
     if (mDiscDetail != nullptr) {
         if (activeDiscLoaded) {
             mDiscDetail->SetProperty(Rml::PropertyId::Display, Rml::Style::Display::Block);
-            Rml::String innerRML = "GameCube • ";
-            innerRML += state.activeDiscInfo.isPal ? "EUR" : "USA";
+            Rml::String innerRML = "GameCube • USA • GALE01 rev ";
+            innerRML += std::to_string(state.activeDiscInfo.discRevision);
+            if (state.activeDiscInfo.discRevision == 2) {
+                innerRML += " (v1.02)";
+            }
             mDiscDetail->SetInnerRML(innerRML);
         }
         else {

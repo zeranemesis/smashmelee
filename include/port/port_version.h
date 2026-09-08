@@ -19,6 +19,7 @@ enum class GameVersion : u8 {
     PalRev1 = VERSION_NO_PAL1,
     PalRev2 = VERSION_NO_PAL2,
     Jpn = VERSION_NO_JP,
+    MeleeUsa102 = 6,
 };
 
 bool isRegionPal();

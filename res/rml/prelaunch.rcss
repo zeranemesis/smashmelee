@@ -96,6 +96,15 @@ hero img {
     width: 100%;
 }
 
+.wordmark {
+    max-width: 720dp;
+    color: #ffffff;
+    font-size: 44dp;
+    line-height: 1.05;
+    letter-spacing: 2dp;
+    font-effect: glow(0dp 3dp 0dp 5dp #000000);
+}
+
 .eyebrow {
     font-size: 24dp;
 }

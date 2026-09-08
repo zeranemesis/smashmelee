@@ -27,13 +27,14 @@ void init() {
         PartyBoardVersionLog.fatal("Wrong company ID in disc: {}", company);
     }
 
-    if (game == "GMPE"sv) {
-        gameVersion = GameVersion::UsaRev1;
-    } else if (game == "GMPP") {
-        gameVersion = GameVersion::PalRev2;
+    if (game == "GALE"sv && diskId.gameVersion == 2) {
+        gameVersion = GameVersion::MeleeUsa102;
     } else {
-        // TODO: Handle remaining valid versions.
-        PartyBoardVersionLog.fatal("Unknown/unsupported game version in disc: {}", game);
+        PartyBoardVersionLog.fatal(
+            "Unknown/unsupported game version in disc: {}{} revision {}",
+            game,
+            company,
+            diskId.gameVersion);
     }
 
     PartyBoardVersionLog.info("Loaded game disc is {}{}", game, company);
@@ -48,7 +49,8 @@ bool isRegionPal() {
 }
 
 bool isRegionUsa() {
-    return getGameVersion() == GameVersion::UsaRev0 || getGameVersion() == GameVersion::UsaRev1;
+    return getGameVersion() == GameVersion::UsaRev0 || getGameVersion() == GameVersion::UsaRev1 ||
+           getGameVersion() == GameVersion::MeleeUsa102;
 }
 
 GameVersion getGameVersion() {

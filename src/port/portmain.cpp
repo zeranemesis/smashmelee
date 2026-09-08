@@ -292,7 +292,7 @@ static std::filesystem::path calculate_config_path() {
 #endif
 #endif
 
-    const auto result = SDL_GetPrefPath("MarioPartyRD", "Party Board");
+    const auto result = SDL_GetPrefPath("MeleeBoard", "Melee Board");
     if (!result) {
         PartyBoardMainLog.error("Unable to get PrefPath: {}", SDL_GetError());
     }
@@ -393,7 +393,7 @@ extern "C" int port_main(int argc, char* argv[]) {
     {
         const auto configPathString = PartyBoard_ConfigPath.u8string();
         AuroraConfig config{};
-        config.appName = "Party Board";
+        config.appName = "Melee Board";
         config.userPath = reinterpret_cast<const char*>(configPathString.c_str());
         config.vsync = partyboard::getSettings().video.enableVsync;
         config.startFullscreen = partyboard::getSettings().video.enableFullscreen;
@@ -417,7 +417,7 @@ extern "C" int port_main(int argc, char* argv[]) {
 #endif
 
     char windowTitle[100];
-    snprintf(windowTitle, sizeof(windowTitle), "PartyBoard %s", PARTY_BOARD_WC_DESCRIBE);
+    snprintf(windowTitle, sizeof(windowTitle), "Melee Board %s", PARTY_BOARD_WC_DESCRIBE);
     VISetWindowTitle(windowTitle);
 
     if (partyboard::getSettings().video.lockAspectRatio) {
@@ -531,7 +531,9 @@ extern "C" int port_main(int argc, char* argv[]) {
     // mDoRst::offReset();
     // mDoRst::setLogoScnFlag(0);
 
+#ifndef MELEE_BOOTSTRAP
     InitializeDol();
+#endif
 
     game_main();
 

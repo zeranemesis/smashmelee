@@ -101,16 +101,17 @@ FetchContent_Declare(json
 FetchContent_MakeAvailable(json)
 
 set(VERSION 1)
-set(PARTY_BOARD_BUNDLE_NAME PartyBoard)
-set(PARTY_BOARD_BUNDLE_IDENTIFIER com.mariopartyrd.partyboard)
-set(PARTY_BOARD_COMPANY_NAME "Mario Party R&D")
-set(PARTY_BOARD_FILE_DESCRIPTION "Party Board")
-set(PARTY_BOARD_PRODUCT_NAME "PartyBoard")
-set(PARTY_BOARD_COPYRIGHT "Copyright (C) Mario Party R&D contributors")
+set(PARTY_BOARD_BUNDLE_NAME MeleeBoard)
+set(PARTY_BOARD_BUNDLE_IDENTIFIER org.meleeboard.port)
+set(PARTY_BOARD_COMPANY_NAME "Melee Board contributors")
+set(PARTY_BOARD_FILE_DESCRIPTION "Melee Board")
+set(PARTY_BOARD_PRODUCT_NAME "MeleeBoard")
+set(PARTY_BOARD_COPYRIGHT "Copyright (C) Melee Board contributors")
 
 option(USE_ASAN "Enable address sanitization" OFF)
 option(SKIP_HU_ALLOC "Skip the game's built in allocator" OFF)
 option(RUNTIME_SANITIZE "Runtime (stack) sanitization" OFF)
+option(MELEE_BOOTSTRAP "Build the Melee PC bootstrap instead of Mario Party 4 game_main" ON)
 
 set(USE_ASAN OFF CACHE BOOL "Disable ASan" FORCE)
 set(AURORA_ENABLE_DVD ON)
@@ -144,6 +145,9 @@ source_group("Port" FILES ${PORT_FILES})
 add_library(dol SHARED ${GAME_FILES} ${PORT_FILES} extern/libco/libco.c)
 set_target_properties(dol PROPERTIES C_VISIBILITY_PRESET default CXX_VISIBILITY_PRESET default)
 target_compile_definitions(dol PRIVATE TARGET_PC NON_MATCHING OPTIMIZED_TEXTURE_LOADING BYTESWAPPING TARGET_DOL VERSION=${VERSION} MUSY_VERSION_MAJOR=1 MUSY_VERSION_MINOR=5 MUSY_VERSION_PATCH=4)
+if (MELEE_BOOTSTRAP)
+    target_compile_definitions(dol PRIVATE MELEE_BOOTSTRAP)
+endif ()
 target_include_directories(dol PRIVATE include extern extern/aurora/include extern/aurora/include/dolphin ${CMAKE_BINARY_DIR})
 target_link_libraries(dol PUBLIC aurora::core aurora::card aurora::dvd aurora::gx aurora::mtx aurora::os aurora::si aurora::vi aurora::pad musyx absl::flat_hash_map nlohmann_json::nlohmann_json fmt::fmt rmlui_debugger)
 # TODO it doesn't work on Linux yet
@@ -186,6 +190,7 @@ if(ANDROID)
     set_target_properties(partyboard PROPERTIES OUTPUT_NAME main)
 else ()
     add_executable(partyboard src/port/entry.cpp)
+    set_target_properties(partyboard PROPERTIES OUTPUT_NAME MeleeBoard)
 endif ()
 target_compile_definitions(partyboard PRIVATE TARGET_PC NON_MATCHING VERSION=${VERSION})
 target_include_directories(partyboard PRIVATE include ${CMAKE_BINARY_DIR})
@@ -194,67 +199,71 @@ aurora_copy_runtime_dlls(partyboard dol)
 
 list(APPEND BINARY_TARGETS partyboard dol)
 
-set(REL_TARGETS "")
-foreach (rel_file ${REL_FILES})
-    get_filename_component(rel_dir ${rel_file} DIRECTORY)
-    get_filename_component(rel_target ${rel_dir} NAME)
-    list(APPEND REL_TARGETS ${rel_target})
-endforeach ()
-list(REMOVE_DUPLICATES REL_TARGETS)
+if (NOT MELEE_BOOTSTRAP)
+    set(REL_TARGETS "")
+    foreach (rel_file ${REL_FILES})
+        get_filename_component(rel_dir ${rel_file} DIRECTORY)
+        get_filename_component(rel_target ${rel_dir} NAME)
+        list(APPEND REL_TARGETS ${rel_target})
+    endforeach ()
+    list(REMOVE_DUPLICATES REL_TARGETS)
 
-# Add RELs
-foreach (dir ${REL_TARGETS})
-    if (IS_DIRECTORY ${CMAKE_SOURCE_DIR}/src/REL/${dir})
-        set(REL_SOURCE_FILES ${REL_FILES})
-        list(FILTER REL_SOURCE_FILES INCLUDE REGEX "^src/REL/${dir}/.*\\.c$")
+    # Mario Party 4 loads boards and minigames as REL modules. Melee does not
+    # use this module layout, so do not build or link those game-specific DLLs
+    # while the Melee bootstrap is selected.
+    foreach (dir ${REL_TARGETS})
+        if (IS_DIRECTORY ${CMAKE_SOURCE_DIR}/src/REL/${dir})
+            set(REL_SOURCE_FILES ${REL_FILES})
+            list(FILTER REL_SOURCE_FILES INCLUDE REGEX "^src/REL/${dir}/.*\\.c$")
 
-        if (REL_SOURCE_FILES)
-            add_library(${dir} SHARED ${REL_SOURCE_FILES})
-            list(APPEND BINARY_TARGETS ${dir})
-            if (USE_ASAN)
-                set_source_files_properties(${REL_SOURCE_FILES} PROPERTIES COMPILE_OPTIONS "-fsanitize=address")
-                target_compile_definitions(${dir} PRIVATE USE_ASAN)
-            endif()
-            if (dir MATCHES "^w..Dll")
-                target_sources(${dir} PRIVATE src/REL/board_executor.c)
-            endif()
-            target_compile_definitions(${dir} PRIVATE TARGET_PC OPTIMIZED_TEXTURE_LOADING BYTESWAPPING NON_MATCHING VERSION=${VERSION})
-            target_include_directories(${dir} PRIVATE include extern extern/aurora/include extern/aurora/include/dolphin)
-            if (MSVC)
-                set_target_properties(${dir} PROPERTIES LINK_FLAGS "/EXPORT:ObjectSetup")
-                # target_compile_options(${dir} PRIVATE "/WX")
-                target_compile_options(${dir} PRIVATE "/wd4244") # implicit narrowing conversion
-                target_compile_options(${dir} PRIVATE "/wd4101") # unreferenced local variable
-                target_compile_options(${dir} PRIVATE "/wd4102") # unreferenced label
-                target_compile_options(${dir} PRIVATE "/wd4305") # truncation
-                target_compile_options(${dir} PRIVATE "/wd4018") # signed/unsigned mismatch
-                target_compile_options(${dir} PRIVATE "/wd4996") # unsafe sprintf, etc
-                target_compile_options(${dir} PRIVATE "/wd4146") # unary minus operator applied to unsigned type, result still unsigned
-                target_compile_options(${dir} PRIVATE "/wd4552") # result of expression not used
-                target_compile_options(${dir} PRIVATE "/wd4553") # result of expression not used: == vs =
-                target_compile_options(${dir} PRIVATE "/wd4113") # function pointer parameter list mismatch
-                target_compile_options(${dir} PRIVATE "/wd4068") # unknown pragma
-                # target_compile_options(${dir} PRIVATE "/Zi")
-                #                target_compile_options(${dir} PRIVATE "/Ob0")
-                target_compile_options(${dir} PRIVATE "/Od")
-                if(NOT USE_ASAN AND RUNTIME_SANITIZE)
-                    target_compile_options(${dir} PRIVATE "/GS")
-                    target_compile_options(${dir} PRIVATE "/RTC1")  # incompatible with asan
+            if (REL_SOURCE_FILES)
+                add_library(${dir} SHARED ${REL_SOURCE_FILES})
+                list(APPEND BINARY_TARGETS ${dir})
+                if (USE_ASAN)
+                    set_source_files_properties(${REL_SOURCE_FILES} PROPERTIES COMPILE_OPTIONS "-fsanitize=address")
+                    target_compile_definitions(${dir} PRIVATE USE_ASAN)
                 endif()
-            elseif (NOT WIN32)
-                # target_compile_options(${dir} PRIVATE "-fvisibility=hidden")
-                if (APPLE)
-                    target_link_options(${dir} PRIVATE "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/rel_symbols.txt")
-                else()
-                    target_link_options(${dir} PRIVATE "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/rel.map")
+                if (dir MATCHES "^w..Dll")
+                    target_sources(${dir} PRIVATE src/REL/board_executor.c)
                 endif()
-                set_target_properties(${dir} PROPERTIES PREFIX "")
+                target_compile_definitions(${dir} PRIVATE TARGET_PC OPTIMIZED_TEXTURE_LOADING BYTESWAPPING NON_MATCHING VERSION=${VERSION})
+                target_include_directories(${dir} PRIVATE include extern extern/aurora/include extern/aurora/include/dolphin)
+                if (MSVC)
+                    set_target_properties(${dir} PROPERTIES LINK_FLAGS "/EXPORT:ObjectSetup")
+                    # target_compile_options(${dir} PRIVATE "/WX")
+                    target_compile_options(${dir} PRIVATE "/wd4244") # implicit narrowing conversion
+                    target_compile_options(${dir} PRIVATE "/wd4101") # unreferenced local variable
+                    target_compile_options(${dir} PRIVATE "/wd4102") # unreferenced label
+                    target_compile_options(${dir} PRIVATE "/wd4305") # truncation
+                    target_compile_options(${dir} PRIVATE "/wd4018") # signed/unsigned mismatch
+                    target_compile_options(${dir} PRIVATE "/wd4996") # unsafe sprintf, etc
+                    target_compile_options(${dir} PRIVATE "/wd4146") # unary minus operator applied to unsigned type, result still unsigned
+                    target_compile_options(${dir} PRIVATE "/wd4552") # result of expression not used
+                    target_compile_options(${dir} PRIVATE "/wd4553") # result of expression not used: == vs =
+                    target_compile_options(${dir} PRIVATE "/wd4113") # function pointer parameter list mismatch
+                    target_compile_options(${dir} PRIVATE "/wd4068") # unknown pragma
+                    # target_compile_options(${dir} PRIVATE "/Zi")
+                    #                target_compile_options(${dir} PRIVATE "/Ob0")
+                    target_compile_options(${dir} PRIVATE "/Od")
+                    if(NOT USE_ASAN AND RUNTIME_SANITIZE)
+                        target_compile_options(${dir} PRIVATE "/GS")
+                        target_compile_options(${dir} PRIVATE "/RTC1")  # incompatible with asan
+                    endif()
+                elseif (NOT WIN32)
+                    # target_compile_options(${dir} PRIVATE "-fvisibility=hidden")
+                    if (APPLE)
+                        target_link_options(${dir} PRIVATE "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/rel_symbols.txt")
+                    else()
+                        target_link_options(${dir} PRIVATE "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/rel.map")
+                    endif()
+                    set_target_properties(${dir} PROPERTIES PREFIX "")
+                endif ()
+                target_link_libraries(${dir} PRIVATE dol musyx aurora::mtx aurora::gx)
+                add_dependencies(partyboard ${dir})
             endif ()
-            target_link_libraries(${dir} PRIVATE dol musyx aurora::mtx aurora::gx)
-            add_dependencies(partyboard ${dir})
         endif ()
-    endif ()
-endforeach ()
+    endforeach ()
+endif ()
 
 if (ANDROID)
     # SDLActivity loads SDL_main via dlsym on Android. Since aurora::main is a static

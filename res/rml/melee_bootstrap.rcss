@@ -1,0 +1,67 @@
+*, *:before, *:after {
+    box-sizing: border-box;
+}
+
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0dp;
+    color: #f7f7f7;
+    font-family: "N64 Party";
+    background-color: #08090d;
+}
+
+.backdrop {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    decorator: horizontal-gradient(#582027 #08090d);
+    opacity: 0.88;
+}
+
+main {
+    position: absolute;
+    left: 10%;
+    top: 50%;
+    width: 80%;
+    transform: translateY(-50%);
+    text-align: center;
+}
+
+.eyebrow {
+    color: #e6a1a8;
+    font-size: 20dp;
+    letter-spacing: 5dp;
+}
+
+h1 {
+    margin: 12dp 0dp 6dp;
+    color: white;
+    font-size: 72dp;
+    letter-spacing: 3dp;
+}
+
+.rule {
+    width: 220dp;
+    height: 4dp;
+    margin: 22dp auto 36dp;
+    background-color: #d44858;
+}
+
+h2 {
+    margin: 0dp 0dp 18dp;
+    color: #f4c8cc;
+    font-size: 34dp;
+}
+
+p {
+    margin: 8dp auto;
+    max-width: 820dp;
+    color: #e6e6e8;
+    font-size: 22dp;
+}
+
+p.next {
+    color: #aaaab2;
+    font-size: 18dp;
+}

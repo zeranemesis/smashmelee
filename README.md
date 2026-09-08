@@ -1,51 +1,39 @@
-<div align="center">
-  <img src="res/logo.png" alt="Logo" width="800">
+# Melee Board
 
-  <p align="center">
-    <a href="https://discord.gg/T4faGveujK">Discord</a>
-  </p>
-</div>
+Melee Board is an experimental native PC port of **Super Smash Bros. Melee**, built from the multiplatform Party Board/Aurora foundation.
 
-# Overview
+The repository contains no Nintendo game assets. A legally obtained, uncompressed USA `GALE01` revision 2 (v1.02) GameCube disc image is required. The expected clean image is 1,459,978,240 bytes; its commonly published MD5 is `0e63d4223b01d9aba596259dc155a174`.
 
-[Build Status]: https://github.com/mariopartyrd/partyboard/actions/workflows/build.yml/badge.svg
-[actions]: https://github.com/mariopartyrd/partyboard/actions/workflows/build.yml
-[Discord Badge]: https://img.shields.io/discord/994839212618690590?color=%237289DA&logo=discord&logoColor=%23FFFFFF
-[discord]: https://discord.gg/T4faGveujK
+## Current state
 
-A work-in-progress Windows/Linux/macOS/Android/iOS port of Mario Party 4.
+The first porting milestone is implemented:
 
-This repository does **not** contain any game assets or assembly whatsoever. An existing copy of the game is required.
+- the Party Board runtime is isolated on the `melee-port` branch;
+- the launcher recognizes only Melee `GALE01` revision 2;
+- Aurora mounts the selected disc image;
+- the Mario Party 4 `game_main` and DOL-address import are disabled in the default build;
+- a dedicated Melee bootstrap loop keeps the native window, renderer, input, and settings UI alive.
+- a host-width-safe HSD object allocator, root class/object model, GObj
+  scheduler, and logical GX frame setup are compiled and self-tested at startup.
 
-Version Completion:
+This is not gameplay-ready yet. HSD integration has started; the next milestone is scene initialization, followed by Melee's scene system. See [docs/MELEE_PORT.md](docs/MELEE_PORT.md).
 
-- `GMPE01_00`: Rev 0 (USA)
-- `GMPE01_01`: Rev 1 (USA)
+## Source reference
 
-### 1. Download [Party Board](https://github.com/mariopartyrd/partyboard/releases)
+The gameplay and HAL code reference is the upstream [`doldecomp/melee`](https://github.com/doldecomp/melee) project, targeting USA v1.02. Keep that source separate from proprietary disc contents.
 
-### 2. Setup the game
+## Building on Windows
 
-- Extract the .zip file
-- Launch partyboard or partyboard.exe depending on your platform.
+Install CMake 3.25+, Ninja, and the Visual Studio C++ workload, then initialize submodules and build:
 
-# Building
+```powershell
+git submodule update --init --recursive
+cmake --preset windows-msvc-relwithdebinfo
+cmake --build --preset windows-msvc-relwithdebinfo
+```
 
-If you'd like to build Party Board from source, please read the [build instructions](building.md).
+`MELEE_BOOTSTRAP=ON` is the default. It intentionally prevents the old Mario Party 4 entry point from running while the Melee runtime is being integrated.
 
-## Common problems
+## Credits
 
-### RenderDoc not working
-
-RenderDoc has some conflict with asan. To turn off asan, you should delete the two lines in `CMakeLists.txt` that enable ASAN for the DOL and the RELs: `set_source_files_properties(..., -fsanitize=address)`
-
-# Credits
-
-Special thanks to the GC/Wii decompilation community, the [Aurora](https://github.com/encounter/aurora) developers, the Dusk developers, all [contributors](https://github.com/mariopartyrd/partyboard/graphs/contributors), [ImWhoreHay](https://x.com/ImWhoreHay) for the font, and justcamtro for designing the assets.
-
-<br/>
-<div align="center">
-    <a href="https://github.com/encounter/aurora">
-        <img src="assets/aurora-powered.png" alt="Powered by Aurora" width="800">
-    </a>
-</div>
+This work builds on Party Board, Aurora, the GameCube/Wii decompilation community, and the `doldecomp/melee` contributors.

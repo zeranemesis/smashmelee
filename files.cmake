@@ -78,6 +78,13 @@ set(GAME_FILES
 )
 
 set(PORT_FILES
+        src/melee_port/bootstrap.cpp
+        src/melee_port/hsd/class.cpp
+        src/melee_port/hsd/gobj.cpp
+        src/melee_port/hsd/host_runtime.cpp
+        src/melee_port/hsd/object.cpp
+        src/melee_port/hsd/objalloc.cpp
+        src/melee_port/hsd/video.cpp
         src/port/achievements.cpp
         src/port/audio.c
         src/port/byteswap.cpp

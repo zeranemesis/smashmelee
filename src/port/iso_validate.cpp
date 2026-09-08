@@ -78,14 +78,18 @@ struct KnownDisc {
     std::string_view id;
     Platform platform;
     Region region;
-    bool supported = false;
+    uint8_t discNumber;
+    uint8_t discRevision;
     std::vector<XXH128_hash_t> mHashes{};
 
-    constexpr KnownDisc(std::string_view id, Platform platform, Region region)
-        : id(id), platform(platform), region(region) {}
     constexpr KnownDisc(
-        std::string_view id, Platform platform, Region region, const std::vector<std::string_view>& hashes)
-        : id(id), platform(platform), region(region), supported(true)
+        std::string_view id,
+        Platform platform,
+        Region region,
+        uint8_t discNumber,
+        uint8_t discRevision,
+        const std::vector<std::string_view>& hashes = {})
+        : id(id), platform(platform), region(region), discNumber(discNumber), discRevision(discRevision)
     {
         for (const auto& hash : hashes) {
             mHashes.push_back(parse_xxh128(hash));
@@ -94,8 +98,7 @@ struct KnownDisc {
 };
 
 const auto KNOWN_DISCS = std::to_array<KnownDisc>({
-    {"GMPE01", Platform::GameCube, Region::NorthAmerica, {"5eda4b612c9d04d16f95b2643ae9faa2", "0f45c2365f5812d970188b7df0b1e2ff"}},
-    {"GMPP01", Platform::GameCube, Region::Europe, {"7c8d20f1032f0025b4a681d23b421078", "ce3f0e8150d6c49093db11875e827023"}},
+    {"GALE01", Platform::GameCube, Region::NorthAmerica, 0, 2},
 });
 
 constexpr const KnownDisc* find_disc(std::string_view id) {
@@ -222,8 +225,16 @@ ValidationError validate(const char* path, VerificationStatus& status, DiscInfo&
     }
     status.knownDisc = knownDisc;
     info.isPal = knownDisc->region == Region::Europe;
-    if (!knownDisc->supported) {
+    info.discNumber = header.disc_num;
+    info.discRevision = header.disc_version;
+    if (info.discNumber != knownDisc->discNumber || info.discRevision != knownDisc->discRevision) {
         return ValidationError::WrongVersion;
+    }
+    // The port does not yet ship an XXH3-128 value for the clean GALE01 v1.02
+    // image. Metadata-valid discs remain launchable, but the UI labels them as
+    // unverified instead of claiming a cryptographic match.
+    if (knownDisc->mHashes.empty()) {
+        return ValidationError::Unknown;
     }
     return verify_disc(disc.handle, status);
 }
@@ -257,7 +268,9 @@ ValidationError inspect(const char* path, DiscInfo& info) {
         return ValidationError::WrongGame;
     }
     info.isPal = knownDisc->region == Region::Europe;
-    if (!knownDisc->supported) {
+    info.discNumber = header.disc_num;
+    info.discRevision = header.disc_version;
+    if (info.discNumber != knownDisc->discNumber || info.discRevision != knownDisc->discRevision) {
         return ValidationError::WrongVersion;
     }
     return ValidationError::Success;

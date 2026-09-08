@@ -74,6 +74,7 @@ void PartyBoard_RequestRestart(void)
 }
 #endif
 
+#ifndef MELEE_BOOTSTRAP
 #ifdef TARGET_PC
 int game_main(void)
 #else
@@ -208,6 +209,7 @@ void main(void)
     return 0;
 #endif
 }
+#endif
 
 void HuSysVWaitSet(s16 vcount)
 {
