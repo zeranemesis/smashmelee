@@ -34,8 +34,8 @@ const Rml::String kBootstrapDocument = R"RML(
         <div class="eyebrow">NATIVE PC PORT</div>
         <h1>MELEE BOARD</h1>
         <div class="rule" />
-        <h2>HSD scene materialized</h2>
-        <p>The GALE01 v1.02 disc file system is mounted; standScene is represented as native models, joint links, and transforms.</p>
+        <h2>HSD draw graph materialized</h2>
+        <p>The GALE01 v1.02 disc file system is mounted; standScene is represented as native models, joints, materials, and primitive objects.</p>
         <p class="next">Next milestone: relocate Melee's HSD data and render the first scene.</p>
     </main>
 </body>
@@ -87,9 +87,9 @@ extern "C" int game_main(void)
         return 1;
     }
     MeleeBootstrapLog.info(
-        "Mounted {}; materialized standScene with {} models and {} joints (M={:#x} C={:#x} L={:#x} F={:#x}); entering bootstrap loop",
+        "Mounted {}; materialized standScene with {} models, {} joints, and {} draw objects (M={:#x} C={:#x} L={:#x} F={:#x}); entering bootstrap loop",
         meleeboard::disc::mounted_path(), host_scene.model_roots().size(),
-        host_scene.joints().size(),
+        host_scene.joints().size(), host_scene.draw_objects().size(),
         stand_scene->models, stand_scene->cameras, stand_scene->lights,
         stand_scene->fogs);
     partyboard::ui::push_document(std::make_unique<MeleeBootstrapDocument>());

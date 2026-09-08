@@ -3,6 +3,7 @@
 #include <melee/sysdolphin/baselib/archive.hpp>
 
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace meleeboard::hsd {
@@ -10,6 +11,7 @@ namespace meleeboard::hsd {
 namespace {
 
 constexpr uint32_t kMaxSceneJoints = 8192;
+constexpr uint32_t kMaxSceneDrawObjects = 32768;
 
 bool read_transform(const Archive& archive, uint32_t offset,
                     std::array<float, 3>& destination)
@@ -29,6 +31,7 @@ bool read_transform(const Archive& archive, uint32_t offset,
 bool HostScene::load(const Archive& archive, std::string_view symbol)
 {
     joints_.clear();
+    draw_objects_.clear();
     model_roots_.clear();
 
     const auto scene = archive.scene_roots(symbol);
@@ -113,6 +116,46 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
         }
     }
 
+    for (HostJoint& joint : joints_) {
+        const auto first = archive.data_word(joint.source_offset + 0x10);
+        if (!first.has_value()) {
+            return false;
+        }
+
+        uint32_t description = *first;
+        std::unordered_set<uint32_t> chain;
+        int32_t previous_draw_object = -1;
+        while (description != 0) {
+            if (!chain.insert(description).second ||
+                draw_objects_.size() >= kMaxSceneDrawObjects) {
+                return false;
+            }
+            const auto next = archive.data_word(description + 0x04);
+            const auto material = archive.data_word(description + 0x08);
+            const auto primitive = archive.data_word(description + 0x0C);
+            if (!next.has_value() || !material.has_value() ||
+                !primitive.has_value()) {
+                return false;
+            }
+
+            HostDrawObject object{};
+            object.source_offset = description;
+            object.material_description = *material;
+            object.primitive_description = *primitive;
+            const int32_t object_index =
+                static_cast<int32_t>(draw_objects_.size());
+            draw_objects_.push_back(object);
+            if (previous_draw_object < 0) {
+                joint.first_draw_object = object_index;
+            } else {
+                draw_objects_[static_cast<size_t>(previous_draw_object)].next =
+                    object_index;
+            }
+            previous_draw_object = object_index;
+            description = *next;
+        }
+    }
+
     for (uint32_t& root : model_roots_) {
         if (root == 0) {
             root = UINT32_MAX;
@@ -130,6 +173,11 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
 const std::vector<HostJoint>& HostScene::joints() const
 {
     return joints_;
+}
+
+const std::vector<HostDrawObject>& HostScene::draw_objects() const
+{
+    return draw_objects_;
 }
 
 const std::vector<uint32_t>& HostScene::model_roots() const
