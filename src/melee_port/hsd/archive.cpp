@@ -112,21 +112,68 @@ uint32_t Archive::public_symbol_count() const
 
 bool Archive::has_public_symbol(std::string_view symbol) const
 {
+    return public_symbol_offset(symbol).has_value();
+}
+
+std::optional<uint32_t> Archive::public_symbol_offset(
+    std::string_view symbol) const
+{
     if (!is_valid()) {
-        return false;
+        return std::nullopt;
     }
 
     for (uint32_t index = 0; index < public_count_; ++index) {
         const size_t record = public_table_offset_ +
             static_cast<size_t>(index) * kSymbolEntrySize;
+        const uint32_t data_offset = read_be_u32(bytes_.data() + record);
         const uint32_t symbol_offset = read_be_u32(bytes_.data() + record + 4);
         const char* name = reinterpret_cast<const char*>(
             bytes_.data() + symbols_offset_ + symbol_offset);
         if (std::string_view(name) == symbol) {
-            return true;
+            return data_offset;
         }
     }
-    return false;
+    return std::nullopt;
+}
+
+std::optional<uint32_t> Archive::data_word(uint32_t data_offset) const
+{
+    if (!is_valid() || data_size_ < sizeof(uint32_t) ||
+        data_offset > data_size_ - sizeof(uint32_t)) {
+        return std::nullopt;
+    }
+    return read_be_u32(bytes_.data() + kHeaderSize + data_offset);
+}
+
+std::optional<SceneRoots> Archive::scene_roots(std::string_view symbol) const
+{
+    const auto root = public_symbol_offset(symbol);
+    if (!root.has_value() || data_size_ < 4 * sizeof(uint32_t) ||
+        *root > data_size_ - 4 * sizeof(uint32_t)) {
+        return std::nullopt;
+    }
+
+    SceneRoots scene{};
+    const auto models = data_word(*root);
+    const auto cameras = data_word(*root + 4);
+    const auto lights = data_word(*root + 8);
+    const auto fogs = data_word(*root + 12);
+    if (!models || !cameras || !lights || !fogs) {
+        return std::nullopt;
+    }
+    scene.models = *models;
+    scene.cameras = *cameras;
+    scene.lights = *lights;
+    scene.fogs = *fogs;
+
+    const auto valid_data_pointer = [this](uint32_t pointer) {
+        return pointer == 0 || pointer < data_size_;
+    };
+    if (!valid_data_pointer(scene.models) || !valid_data_pointer(scene.cameras) ||
+        !valid_data_pointer(scene.lights) || !valid_data_pointer(scene.fogs)) {
+        return std::nullopt;
+    }
+    return scene;
 }
 
 } // namespace meleeboard::hsd
