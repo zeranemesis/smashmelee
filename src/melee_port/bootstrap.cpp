@@ -3,6 +3,7 @@
 #include "hsd/host_runtime.hpp"
 
 #include <melee/port/disc_mount.hpp>
+#include <melee/sysdolphin/baselib/archive.hpp>
 
 #include "../port/ui/document.hpp"
 #include "../port/ui/ui.hpp"
@@ -15,6 +16,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -31,9 +33,9 @@ const Rml::String kBootstrapDocument = R"RML(
         <div class="eyebrow">NATIVE PC PORT</div>
         <h1>MELEE BOARD</h1>
         <div class="rule" />
-        <h2>HSD host graphics ready</h2>
-        <p>The GALE01 v1.02 disc file system is mounted; HSD allocation, classes, scheduling, and GX state are verified.</p>
-        <p class="next">Next milestone: load Melee's HSD archives and reach the first scene.</p>
+        <h2>HSD archive loaded</h2>
+        <p>The GALE01 v1.02 disc file system is mounted and GmRgStnd.dat's standScene symbol is available to the host.</p>
+        <p class="next">Next milestone: relocate Melee's HSD data and render the first scene.</p>
     </main>
 </body>
 </rml>
@@ -56,8 +58,16 @@ extern "C" int game_main(void)
         MeleeBootstrapLog.error("Could not mount the selected GALE01 v1.02 disc image");
         return 1;
     }
-    if (!meleeboard::disc::has_file("opening.bnr")) {
-        MeleeBootstrapLog.error("Mounted disc is missing opening.bnr");
+    std::vector<unsigned char> archive_bytes;
+    if (!meleeboard::disc::read_file("GmRgStnd.dat", archive_bytes)) {
+        MeleeBootstrapLog.error("Mounted disc is missing GmRgStnd.dat");
+        meleeboard::disc::unmount();
+        return 1;
+    }
+    meleeboard::hsd::Archive archive;
+    if (!archive.parse(std::move(archive_bytes)) ||
+        !archive.has_public_symbol("standScene")) {
+        MeleeBootstrapLog.error("Could not parse GmRgStnd.dat or locate standScene");
         meleeboard::disc::unmount();
         return 1;
     }
@@ -67,8 +77,8 @@ extern "C" int game_main(void)
         return 1;
     }
     MeleeBootstrapLog.info(
-        "Mounted {}; HSD allocator and class model verified; entering bootstrap loop",
-        meleeboard::disc::mounted_path());
+        "Mounted {}; parsed GmRgStnd.dat ({} public symbols); entering bootstrap loop",
+        meleeboard::disc::mounted_path(), archive.public_symbol_count());
     partyboard::ui::push_document(std::make_unique<MeleeBootstrapDocument>());
 
     while (PartyBoard_IsRunning) {
