@@ -4,6 +4,10 @@ Melee Board is an experimental native PC port of **Super Smash Bros. Melee**, bu
 
 The repository contains no Nintendo game assets. A legally obtained, uncompressed USA `GALE01` revision 2 (v1.02) GameCube disc image is required. The expected clean image is 1,459,978,240 bytes; its commonly published MD5 is `0e63d4223b01d9aba596259dc155a174`.
 
+## Automatic Windows builds
+
+Each push to `melee-port` starts a GitHub Actions build for Windows. Once it succeeds, the most recent **MeleeBoard-Windows-latest** artifact can be downloaded from the repository's Actions page. It contains the executable, its required runtime DLLs, and resources, but never a game disc image or Nintendo assets.
+
 ## Current state
 
 The first porting milestone is implemented:

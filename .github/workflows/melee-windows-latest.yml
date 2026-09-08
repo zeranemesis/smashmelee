@@ -1,0 +1,46 @@
+name: MeleeBoard Windows latest
+
+on:
+  push:
+    branches:
+      - melee-port
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build MeleeBoard for Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Enable the MSVC build environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      - name: Install Ninja
+        shell: pwsh
+        run: choco install ninja --no-progress --yes
+
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset windows-msvc-relwithdebinfo
+
+      - name: Build and stage the portable package
+        shell: pwsh
+        run: cmake --build --preset windows-msvc-relwithdebinfo --target install --parallel 4
+
+      - name: Publish the latest Windows package
+        uses: actions/upload-artifact@v7
+        with:
+          name: MeleeBoard-Windows-latest
+          path: build/install
+          if-no-files-found: error
+          retention-days: 30
