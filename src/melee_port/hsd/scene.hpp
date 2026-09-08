@@ -24,6 +24,13 @@ struct HostDrawObject {
     uint32_t source_offset = 0;
     uint32_t material_description = 0;
     uint32_t primitive_description = 0;
+    uint32_t render_mode = 0;
+    uint32_t texture_description = 0;
+    uint32_t material = 0;
+    uint32_t vertex_description = 0;
+    uint32_t display_list = 0;
+    uint16_t primitive_flags = 0;
+    uint16_t display_list_count = 0;
     int32_t next = -1;
 };
 

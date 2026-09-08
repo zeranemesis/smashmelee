@@ -142,6 +142,40 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
             object.source_offset = description;
             object.material_description = *material;
             object.primitive_description = *primitive;
+
+            if (*material != 0) {
+                const auto render_mode = archive.data_word(*material + 0x04);
+                const auto texture_description =
+                    archive.data_word(*material + 0x08);
+                const auto material_data = archive.data_word(*material + 0x0C);
+                if (!render_mode.has_value() ||
+                    !texture_description.has_value() ||
+                    !material_data.has_value()) {
+                    return false;
+                }
+                object.render_mode = *render_mode;
+                object.texture_description = *texture_description;
+                object.material = *material_data;
+            }
+
+            if (*primitive != 0) {
+                const auto vertex_description =
+                    archive.data_word(*primitive + 0x08);
+                const auto flags_and_display_count =
+                    archive.data_word(*primitive + 0x0C);
+                const auto display_list = archive.data_word(*primitive + 0x10);
+                if (!vertex_description.has_value() ||
+                    !flags_and_display_count.has_value() ||
+                    !display_list.has_value()) {
+                    return false;
+                }
+                object.vertex_description = *vertex_description;
+                object.primitive_flags =
+                    static_cast<uint16_t>(*flags_and_display_count >> 16);
+                object.display_list_count =
+                    static_cast<uint16_t>(*flags_and_display_count);
+                object.display_list = *display_list;
+            }
             const int32_t object_index =
                 static_cast<int32_t>(draw_objects_.size());
             draw_objects_.push_back(object);
