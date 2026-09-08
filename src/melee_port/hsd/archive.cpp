@@ -11,6 +11,8 @@ namespace {
 constexpr size_t kHeaderSize = 0x20;
 constexpr size_t kRelocationEntrySize = 0x04;
 constexpr size_t kSymbolEntrySize = 0x08;
+constexpr size_t kDynamicModelDescSize = 0x10;
+constexpr uint32_t kMaxSceneModels = 256;
 
 uint32_t read_be_u32(const unsigned char* data)
 {
@@ -174,6 +176,41 @@ std::optional<SceneRoots> Archive::scene_roots(std::string_view symbol) const
         return std::nullopt;
     }
     return scene;
+}
+
+std::optional<uint32_t> Archive::scene_model_count(
+    std::string_view symbol) const
+{
+    const auto scene = scene_roots(symbol);
+    if (!scene.has_value()) {
+        return std::nullopt;
+    }
+    if (scene->models == 0) {
+        return 0;
+    }
+
+    for (uint32_t index = 0; index < kMaxSceneModels; ++index) {
+        if (data_size_ < sizeof(uint32_t) ||
+            scene->models > data_size_ - sizeof(uint32_t) ||
+            index > (data_size_ - sizeof(uint32_t) - scene->models) /
+                    sizeof(uint32_t)) {
+            return std::nullopt;
+        }
+        const uint32_t array_offset = scene->models +
+            index * sizeof(uint32_t);
+        const auto model = data_word(array_offset);
+        if (!model.has_value()) {
+            return std::nullopt;
+        }
+        if (*model == 0) {
+            return index;
+        }
+        if (data_size_ < kDynamicModelDescSize ||
+            *model > data_size_ - kDynamicModelDescSize) {
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace meleeboard::hsd

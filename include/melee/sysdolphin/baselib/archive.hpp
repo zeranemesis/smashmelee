@@ -33,6 +33,7 @@ public:
     std::optional<uint32_t> public_symbol_offset(std::string_view symbol) const;
     std::optional<uint32_t> data_word(uint32_t data_offset) const;
     std::optional<SceneRoots> scene_roots(std::string_view symbol) const;
+    std::optional<uint32_t> scene_model_count(std::string_view symbol) const;
 
 private:
     uint32_t public_count_ = 0;

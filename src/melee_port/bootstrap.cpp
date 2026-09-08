@@ -34,7 +34,7 @@ const Rml::String kBootstrapDocument = R"RML(
         <h1>MELEE BOARD</h1>
         <div class="rule" />
         <h2>HSD scene graph decoded</h2>
-        <p>The GALE01 v1.02 disc file system is mounted; GmRgStnd.dat's standScene roots now expose models, cameras, lights, and fog.</p>
+        <p>The GALE01 v1.02 disc file system is mounted; GmRgStnd.dat's standScene graph and native model list are decoded.</p>
         <p class="next">Next milestone: relocate Melee's HSD data and render the first scene.</p>
     </main>
 </body>
@@ -71,8 +71,9 @@ extern "C" int game_main(void)
         return 1;
     }
     const auto stand_scene = archive.scene_roots("standScene");
-    if (!stand_scene.has_value()) {
-        MeleeBootstrapLog.error("Could not decode GmRgStnd.dat's standScene roots");
+    const auto model_count = archive.scene_model_count("standScene");
+    if (!stand_scene.has_value() || !model_count.has_value()) {
+        MeleeBootstrapLog.error("Could not decode GmRgStnd.dat's standScene graph");
         meleeboard::disc::unmount();
         return 1;
     }
@@ -82,9 +83,10 @@ extern "C" int game_main(void)
         return 1;
     }
     MeleeBootstrapLog.info(
-        "Mounted {}; decoded standScene roots M={:#x} C={:#x} L={:#x} F={:#x}; entering bootstrap loop",
-        meleeboard::disc::mounted_path(), stand_scene->models,
-        stand_scene->cameras, stand_scene->lights, stand_scene->fogs);
+        "Mounted {}; decoded standScene with {} model descriptors (M={:#x} C={:#x} L={:#x} F={:#x}); entering bootstrap loop",
+        meleeboard::disc::mounted_path(), *model_count, stand_scene->models,
+        stand_scene->cameras, stand_scene->lights,
+        stand_scene->fogs);
     partyboard::ui::push_document(std::make_unique<MeleeBootstrapDocument>());
 
     while (PartyBoard_IsRunning) {
