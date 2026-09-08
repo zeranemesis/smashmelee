@@ -2,6 +2,9 @@
 
 #include <melee/sysdolphin/baselib/archive.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -173,6 +176,138 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
     return true;
 }
 
+bool read_position(const Archive& archive,
+                   const HostVertexDescriptor& descriptor, uint32_t index,
+                   std::array<float, 3>& position, std::string& error)
+{
+    if (descriptor.attribute != 9) {
+        error = "position descriptor has a non-position attribute";
+        return false;
+    }
+    if (descriptor.vertex_data == 0) {
+        error = "position descriptor has no vertex array";
+        return false;
+    }
+    if (descriptor.component_count > 1) {
+        error = "position descriptor has an unknown component count";
+        return false;
+    }
+
+    uint32_t component_size = 0;
+    switch (descriptor.component_type) {
+    case 0: // GX_U8
+    case 1: // GX_S8
+        component_size = 1;
+        break;
+    case 2: // GX_U16
+    case 3: // GX_S16
+        component_size = 2;
+        break;
+    case 4: // GX_F32
+        component_size = 4;
+        break;
+    default:
+        error = "position descriptor has an unsupported component type";
+        return false;
+    }
+    const uint32_t component_count = descriptor.component_count == 0 ? 2 : 3;
+    if (descriptor.stride < component_count * component_size) {
+        error = "position descriptor stride is shorter than its components";
+        return false;
+    }
+    const uint64_t offset = static_cast<uint64_t>(descriptor.vertex_data) +
+        static_cast<uint64_t>(index) * descriptor.stride;
+    const uint64_t bytes = component_count * component_size;
+    if (offset > std::numeric_limits<uint32_t>::max() ||
+        !archive.contains_data_range(static_cast<uint32_t>(offset),
+                                     static_cast<uint32_t>(bytes))) {
+        error = "position index points outside the HSD vertex array";
+        return false;
+    }
+
+    position = { 0.0F, 0.0F, 0.0F };
+    for (uint32_t component = 0; component < component_count; ++component) {
+        const uint32_t component_offset = static_cast<uint32_t>(offset) +
+            component * component_size;
+        float value = 0;
+        if (descriptor.component_type == 4) {
+            const auto floating = archive.data_float(component_offset);
+            if (!floating.has_value()) {
+                error = "floating-point position lies outside the HSD data";
+                return false;
+            }
+            value = *floating;
+        } else {
+            const auto first = archive.data_byte(component_offset);
+            if (!first.has_value()) {
+                error = "integer position lies outside the HSD data";
+                return false;
+            }
+            int32_t integer = *first;
+            if (component_size == 2) {
+                const auto second = archive.data_byte(component_offset + 1);
+                if (!second.has_value()) {
+                    error = "16-bit position lies outside the HSD data";
+                    return false;
+                }
+                integer = (integer << 8) | *second;
+                if (descriptor.component_type == 3) {
+                    integer = static_cast<int16_t>(integer);
+                }
+            } else if (descriptor.component_type == 1) {
+                integer = static_cast<int8_t>(integer);
+            }
+            value = std::ldexp(static_cast<float>(integer),
+                               -static_cast<int>(descriptor.fraction));
+        }
+        position[component] = value;
+    }
+    return true;
+}
+
+bool materialize_positions(const Archive& archive, HostDrawObject& object,
+                           std::string& error)
+{
+    if (object.triangle_position_indices.empty()) {
+        return true;
+    }
+    const auto descriptor = std::find_if(
+        object.vertex_descriptors.begin(), object.vertex_descriptors.end(),
+        [](const HostVertexDescriptor& candidate) {
+            return candidate.attribute == 9;
+        });
+    if (descriptor == object.vertex_descriptors.end()) {
+        error = "GX stream has no position descriptor";
+        return false;
+    }
+
+    if (descriptor->attribute_type != kGxIndex8 &&
+        descriptor->attribute_type != kGxIndex16) {
+        error = "position descriptor is not index-addressed";
+        return false;
+    }
+
+    std::unordered_map<uint32_t, uint32_t> host_indices;
+    for (uint32_t source_index : object.triangle_position_indices) {
+        const auto existing = host_indices.find(source_index);
+        if (existing != host_indices.end()) {
+            object.triangle_indices.push_back(existing->second);
+            continue;
+        }
+        std::array<float, 3> position{};
+        if (!read_position(archive, *descriptor, source_index, position,
+                           error)) {
+            return false;
+        }
+        const uint32_t host_index =
+            static_cast<uint32_t>(object.positions.size());
+        object.positions.push_back(position);
+        host_indices.emplace(source_index, host_index);
+        object.triangle_indices.push_back(host_index);
+    }
+    return true;
+}
+
 bool read_transform(const Archive& archive, uint32_t offset,
                     std::array<float, 3>& destination)
 {
@@ -193,6 +328,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
     joints_.clear();
     draw_objects_.clear();
     model_roots_.clear();
+    last_error_ = "could not resolve HSD scene roots";
 
     const auto scene = archive.scene_roots(symbol);
     const auto model_count = archive.scene_model_count(symbol);
@@ -200,6 +336,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
         return false;
     }
 
+    last_error_ = "could not build HSD joint hierarchy";
     std::vector<uint32_t> pending;
     for (uint32_t index = 0; index < *model_count; ++index) {
         const auto model = archive.data_word(scene->models +
@@ -254,6 +391,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
         }
     }
 
+    last_error_ = "could not link HSD joint hierarchy";
     for (HostJoint& joint : joints_) {
         const auto child = archive.data_word(joint.source_offset + 0x08);
         const auto sibling = archive.data_word(joint.source_offset + 0x0C);
@@ -276,6 +414,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
         }
     }
 
+    last_error_ = "could not decode HSD draw objects";
     for (HostJoint& joint : joints_) {
         const auto first = archive.data_word(joint.source_offset + 0x10);
         if (!first.has_value()) {
@@ -390,7 +529,18 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                     return false;
                 }
                 if (!parse_display_list(archive, object)) {
+                    last_error_ = "unsupported or malformed GX display stream";
                     return false;
+                }
+                std::string position_error;
+                if (materialize_positions(archive, object, position_error)) {
+                    object.position_stream_decoded = true;
+                } else {
+                    // An individual legacy vertex layout must not prevent the
+                    // rest of a scene from loading.  The host renderer can
+                    // skip this object until its layout is implemented.
+                    object.positions.clear();
+                    object.triangle_indices.clear();
                 }
             }
             const int32_t object_index =
@@ -407,6 +557,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
         }
     }
 
+    last_error_ = "could not resolve HSD model roots";
     for (uint32_t& root : model_roots_) {
         if (root == 0) {
             root = UINT32_MAX;
@@ -418,7 +569,13 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
         }
         root = iterator->second;
     }
+    last_error_.clear();
     return true;
+}
+
+const std::string& HostScene::last_error() const
+{
+    return last_error_;
 }
 
 const std::vector<HostJoint>& HostScene::joints() const

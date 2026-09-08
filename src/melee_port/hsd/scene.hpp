@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -46,9 +47,12 @@ struct HostDrawObject {
     uint32_t primitive_batch_count = 0;
     uint32_t vertex_count = 0;
     uint32_t triangle_count = 0;
+    bool position_stream_decoded = false;
     // Position-array indices arranged as triangles.  These remain indices into
     // the HSD position array until the host GPU upload step.
     std::vector<uint32_t> triangle_position_indices;
+    std::vector<std::array<float, 3>> positions;
+    std::vector<uint32_t> triangle_indices;
     std::vector<HostVertexDescriptor> vertex_descriptors;
     int32_t next = -1;
 };
@@ -62,11 +66,13 @@ public:
     const std::vector<HostJoint>& joints() const;
     const std::vector<HostDrawObject>& draw_objects() const;
     const std::vector<uint32_t>& model_roots() const;
+    const std::string& last_error() const;
 
 private:
     std::vector<HostJoint> joints_;
     std::vector<HostDrawObject> draw_objects_;
     std::vector<uint32_t> model_roots_;
+    std::string last_error_;
 };
 
 } // namespace meleeboard::hsd

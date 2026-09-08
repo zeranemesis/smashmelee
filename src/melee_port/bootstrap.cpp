@@ -77,7 +77,9 @@ extern "C" int game_main(void)
     meleeboard::hsd::HostScene host_scene;
     if (!stand_scene.has_value() || !model_count.has_value() ||
         !joint_count.has_value() || !host_scene.load(archive, "standScene")) {
-        MeleeBootstrapLog.error("Could not decode GmRgStnd.dat's standScene graph");
+        MeleeBootstrapLog.error(
+            "Could not decode GmRgStnd.dat's standScene graph ({})",
+            host_scene.last_error());
         meleeboard::disc::unmount();
         return 1;
     }
