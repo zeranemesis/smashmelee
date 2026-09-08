@@ -150,6 +150,18 @@ std::optional<uint32_t> Archive::data_word(uint32_t data_offset) const
     return read_be_u32(bytes_.data() + kHeaderSize + data_offset);
 }
 
+std::optional<float> Archive::data_float(uint32_t data_offset) const
+{
+    const auto bits = data_word(data_offset);
+    if (!bits.has_value()) {
+        return std::nullopt;
+    }
+    float value = 0;
+    static_assert(sizeof(value) == sizeof(*bits));
+    std::memcpy(&value, &*bits, sizeof(value));
+    return value;
+}
+
 std::optional<SceneRoots> Archive::scene_roots(std::string_view symbol) const
 {
     const auto root = public_symbol_offset(symbol);

@@ -41,7 +41,7 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       safe deferred removal;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
-- [x] mount a local GALE01 v1.02 ISO/RVZ, expose its GameCube FST, and decode the `standScene` roots from `GmRgStnd.dat` without unsafe host-pointer casts;
+- [x] mount a local GALE01 v1.02 ISO/RVZ, expose its GameCube FST, and materialize the `standScene` model/joint transforms from `GmRgStnd.dat` without unsafe host-pointer casts;
 - import the upstream `Runtime`, `sysdolphin`, and required `melee/lb` headers/sources;
 - make pointer-width and endian assumptions explicit;
 - compile object/class allocation, GObj scheduling, VI, and GX initialization;

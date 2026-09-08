@@ -86,6 +86,7 @@ set(PORT_FILES
         src/melee_port/hsd/host_runtime.cpp
         src/melee_port/hsd/object.cpp
         src/melee_port/hsd/objalloc.cpp
+        src/melee_port/hsd/scene.cpp
         src/melee_port/hsd/video.cpp
         src/port/achievements.cpp
         src/port/audio.c
