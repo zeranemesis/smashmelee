@@ -46,6 +46,9 @@ struct HostDrawObject {
     uint32_t primitive_batch_count = 0;
     uint32_t vertex_count = 0;
     uint32_t triangle_count = 0;
+    // Position-array indices arranged as triangles.  These remain indices into
+    // the HSD position array until the host GPU upload step.
+    std::vector<uint32_t> triangle_position_indices;
     std::vector<HostVertexDescriptor> vertex_descriptors;
     int32_t next = -1;
 };

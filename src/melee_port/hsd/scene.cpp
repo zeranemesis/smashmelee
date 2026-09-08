@@ -14,6 +14,7 @@ constexpr uint32_t kMaxSceneJoints = 8192;
 constexpr uint32_t kMaxSceneDrawObjects = 32768;
 constexpr uint32_t kMaxVertexDescriptors = 32;
 constexpr uint32_t kVertexDescriptorSize = 0x18;
+constexpr uint32_t kGxVertexAttributeNull = 0xFF;
 constexpr uint8_t kGxOpcodeMask = 0xF8;
 constexpr uint8_t kGxQuads = 0x80;
 constexpr uint8_t kGxTriangles = 0x90;
@@ -29,15 +30,18 @@ constexpr uint32_t kGxIndex16 = 3;
 bool parse_display_list(const Archive& archive, HostDrawObject& object)
 {
     uint32_t bytes_per_vertex = 0;
+    uint32_t position_index_offset = UINT32_MAX;
+    uint32_t position_index_width = 0;
     for (const HostVertexDescriptor& descriptor : object.vertex_descriptors) {
+        uint32_t attribute_bytes = 0;
         switch (descriptor.attribute_type) {
         case 0:
             break;
         case kGxIndex8:
-            ++bytes_per_vertex;
+            attribute_bytes = 1;
             break;
         case kGxIndex16:
-            bytes_per_vertex += 2;
+            attribute_bytes = 2;
             break;
         case kGxDirect:
             // Matrix indices are the only direct fields emitted by the HSD
@@ -45,11 +49,20 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
             if (descriptor.attribute > 8) {
                 return false;
             }
-            ++bytes_per_vertex;
+            attribute_bytes = 1;
             break;
         default:
             return false;
         }
+        if (descriptor.attribute == 9) { // GX_VA_POS
+            if (descriptor.attribute_type != kGxIndex8 &&
+                descriptor.attribute_type != kGxIndex16) {
+                return false;
+            }
+            position_index_offset = bytes_per_vertex;
+            position_index_width = attribute_bytes;
+        }
+        bytes_per_vertex += attribute_bytes;
     }
 
     const uint32_t display_bytes =
@@ -77,6 +90,38 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
             vertices > (display_bytes - cursor) / bytes_per_vertex) {
             return false;
         }
+        if (vertices != 0 && position_index_offset == UINT32_MAX) {
+            return false;
+        }
+
+        std::vector<uint32_t> position_indices;
+        position_indices.reserve(vertices);
+        for (uint32_t vertex = 0; vertex < vertices; ++vertex) {
+            const uint32_t position_offset = cursor +
+                vertex * bytes_per_vertex + position_index_offset;
+            const auto first = archive.data_byte(object.display_list +
+                                                 position_offset);
+            if (!first.has_value()) {
+                return false;
+            }
+            uint32_t position_index = *first;
+            if (position_index_width == 2) {
+                const auto second = archive.data_byte(object.display_list +
+                                                      position_offset + 1);
+                if (!second.has_value()) {
+                    return false;
+                }
+                position_index = (position_index << 8) | *second;
+            }
+            position_indices.push_back(position_index);
+        }
+        const auto append_triangle = [&object, &position_indices](uint32_t a,
+                                                                   uint32_t b,
+                                                                   uint32_t c) {
+            object.triangle_position_indices.push_back(position_indices[a]);
+            object.triangle_position_indices.push_back(position_indices[b]);
+            object.triangle_position_indices.push_back(position_indices[c]);
+        };
         const uint8_t primitive = *command & kGxOpcodeMask;
         switch (primitive) {
         case kGxQuads:
@@ -84,16 +129,35 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
                 return false;
             }
             object.triangle_count += (vertices / 4) * 2;
+            for (uint32_t index = 0; index < vertices; index += 4) {
+                append_triangle(index, index + 1, index + 2);
+                append_triangle(index, index + 2, index + 3);
+            }
             break;
         case kGxTriangles:
             if (vertices % 3 != 0) {
                 return false;
             }
             object.triangle_count += vertices / 3;
+            for (uint32_t index = 0; index < vertices; index += 3) {
+                append_triangle(index, index + 1, index + 2);
+            }
             break;
         case kGxTriangleStrip:
+            object.triangle_count += vertices >= 3 ? vertices - 2 : 0;
+            for (uint32_t index = 2; index < vertices; ++index) {
+                if (index % 2 == 0) {
+                    append_triangle(index - 2, index - 1, index);
+                } else {
+                    append_triangle(index - 1, index - 2, index);
+                }
+            }
+            break;
         case kGxTriangleFan:
             object.triangle_count += vertices >= 3 ? vertices - 2 : 0;
+            for (uint32_t index = 2; index < vertices; ++index) {
+                append_triangle(0, index - 1, index);
+            }
             break;
         case kGxLines:
         case kGxLineStrip:
@@ -290,7 +354,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                     if (!attribute.has_value()) {
                         return false;
                     }
-                    if (*attribute == 0) {
+                    if (*attribute == kGxVertexAttributeNull) {
                         descriptors_terminated = true;
                         break;
                     }
