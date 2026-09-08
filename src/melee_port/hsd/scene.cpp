@@ -14,6 +14,100 @@ constexpr uint32_t kMaxSceneJoints = 8192;
 constexpr uint32_t kMaxSceneDrawObjects = 32768;
 constexpr uint32_t kMaxVertexDescriptors = 32;
 constexpr uint32_t kVertexDescriptorSize = 0x18;
+constexpr uint8_t kGxOpcodeMask = 0xF8;
+constexpr uint8_t kGxQuads = 0x80;
+constexpr uint8_t kGxTriangles = 0x90;
+constexpr uint8_t kGxTriangleStrip = 0x98;
+constexpr uint8_t kGxTriangleFan = 0xA0;
+constexpr uint8_t kGxLines = 0xA8;
+constexpr uint8_t kGxLineStrip = 0xB0;
+constexpr uint8_t kGxPoints = 0xB8;
+constexpr uint32_t kGxDirect = 1;
+constexpr uint32_t kGxIndex8 = 2;
+constexpr uint32_t kGxIndex16 = 3;
+
+bool parse_display_list(const Archive& archive, HostDrawObject& object)
+{
+    uint32_t bytes_per_vertex = 0;
+    for (const HostVertexDescriptor& descriptor : object.vertex_descriptors) {
+        switch (descriptor.attribute_type) {
+        case 0:
+            break;
+        case kGxIndex8:
+            ++bytes_per_vertex;
+            break;
+        case kGxIndex16:
+            bytes_per_vertex += 2;
+            break;
+        case kGxDirect:
+            // Matrix indices are the only direct fields emitted by the HSD
+            // model lists handled here; each occupies one byte in GX FIFO.
+            if (descriptor.attribute > 8) {
+                return false;
+            }
+            ++bytes_per_vertex;
+            break;
+        default:
+            return false;
+        }
+    }
+
+    const uint32_t display_bytes =
+        static_cast<uint32_t>(object.display_list_count) << 5;
+    uint32_t cursor = 0;
+    while (cursor < display_bytes) {
+        const auto command = archive.data_byte(object.display_list + cursor++);
+        if (!command.has_value()) {
+            return false;
+        }
+        if (*command == 0) {
+            continue;
+        }
+        if (display_bytes - cursor < 2) {
+            return false;
+        }
+        const auto high = archive.data_byte(object.display_list + cursor++);
+        const auto low = archive.data_byte(object.display_list + cursor++);
+        if (!high.has_value() || !low.has_value()) {
+            return false;
+        }
+        const uint32_t vertices =
+            (static_cast<uint32_t>(*high) << 8) | *low;
+        if (bytes_per_vertex != 0 &&
+            vertices > (display_bytes - cursor) / bytes_per_vertex) {
+            return false;
+        }
+        const uint8_t primitive = *command & kGxOpcodeMask;
+        switch (primitive) {
+        case kGxQuads:
+            if (vertices % 4 != 0) {
+                return false;
+            }
+            object.triangle_count += (vertices / 4) * 2;
+            break;
+        case kGxTriangles:
+            if (vertices % 3 != 0) {
+                return false;
+            }
+            object.triangle_count += vertices / 3;
+            break;
+        case kGxTriangleStrip:
+        case kGxTriangleFan:
+            object.triangle_count += vertices >= 3 ? vertices - 2 : 0;
+            break;
+        case kGxLines:
+        case kGxLineStrip:
+        case kGxPoints:
+            break;
+        default:
+            return false;
+        }
+        object.vertex_count += vertices;
+        ++object.primitive_batch_count;
+        cursor += vertices * bytes_per_vertex;
+    }
+    return true;
+}
 
 bool read_transform(const Archive& archive, uint32_t offset,
                     std::array<float, 3>& destination)
@@ -229,6 +323,9 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                     });
                 }
                 if (!descriptors_terminated) {
+                    return false;
+                }
+                if (!parse_display_list(archive, object)) {
                     return false;
                 }
             }

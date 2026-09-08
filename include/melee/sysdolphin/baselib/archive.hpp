@@ -32,6 +32,7 @@ public:
     // must resolve them through a host address model instead of casting them.
     std::optional<uint32_t> public_symbol_offset(std::string_view symbol) const;
     bool contains_data_range(uint32_t data_offset, uint32_t byte_count) const;
+    std::optional<uint8_t> data_byte(uint32_t data_offset) const;
     std::optional<uint32_t> data_word(uint32_t data_offset) const;
     std::optional<float> data_float(uint32_t data_offset) const;
     std::optional<SceneRoots> scene_roots(std::string_view symbol) const;

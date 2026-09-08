@@ -43,6 +43,9 @@ struct HostDrawObject {
     uint32_t display_list = 0;
     uint16_t primitive_flags = 0;
     uint16_t display_list_count = 0;
+    uint32_t primitive_batch_count = 0;
+    uint32_t vertex_count = 0;
+    uint32_t triangle_count = 0;
     std::vector<HostVertexDescriptor> vertex_descriptors;
     int32_t next = -1;
 };

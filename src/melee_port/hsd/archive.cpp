@@ -155,6 +155,14 @@ bool Archive::contains_data_range(uint32_t data_offset, uint32_t byte_count) con
         byte_count <= data_size_ - data_offset;
 }
 
+std::optional<uint8_t> Archive::data_byte(uint32_t data_offset) const
+{
+    if (!contains_data_range(data_offset, 1)) {
+        return std::nullopt;
+    }
+    return bytes_[kHeaderSize + data_offset];
+}
+
 std::optional<float> Archive::data_float(uint32_t data_offset) const
 {
     const auto bits = data_word(data_offset);
