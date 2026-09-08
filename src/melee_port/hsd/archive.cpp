@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <unordered_set>
 
 namespace meleeboard::hsd {
 
@@ -12,7 +13,9 @@ constexpr size_t kHeaderSize = 0x20;
 constexpr size_t kRelocationEntrySize = 0x04;
 constexpr size_t kSymbolEntrySize = 0x08;
 constexpr size_t kDynamicModelDescSize = 0x10;
+constexpr size_t kJointDescSize = 0x40;
 constexpr uint32_t kMaxSceneModels = 256;
+constexpr uint32_t kMaxSceneJoints = 8192;
 
 uint32_t read_be_u32(const unsigned char* data)
 {
@@ -211,6 +214,57 @@ std::optional<uint32_t> Archive::scene_model_count(
         }
     }
     return std::nullopt;
+}
+
+std::optional<uint32_t> Archive::scene_joint_count(std::string_view symbol) const
+{
+    const auto scene = scene_roots(symbol);
+    const auto model_count = scene_model_count(symbol);
+    if (!scene.has_value() || !model_count.has_value()) {
+        return std::nullopt;
+    }
+
+    std::vector<uint32_t> pending;
+    for (uint32_t index = 0; index < *model_count; ++index) {
+        const auto model = data_word(scene->models + index * sizeof(uint32_t));
+        if (!model.has_value() || data_size_ < kDynamicModelDescSize ||
+            *model > data_size_ - kDynamicModelDescSize) {
+            return std::nullopt;
+        }
+        const auto joint = data_word(*model);
+        if (!joint.has_value()) {
+            return std::nullopt;
+        }
+        if (*joint != 0) {
+            pending.push_back(*joint);
+        }
+    }
+
+    std::unordered_set<uint32_t> visited;
+    while (!pending.empty()) {
+        const uint32_t joint = pending.back();
+        pending.pop_back();
+        if (!visited.insert(joint).second) {
+            continue;
+        }
+        if (visited.size() > kMaxSceneJoints || data_size_ < kJointDescSize ||
+            joint > data_size_ - kJointDescSize) {
+            return std::nullopt;
+        }
+
+        const auto child = data_word(joint + 0x08);
+        const auto next = data_word(joint + 0x0C);
+        if (!child.has_value() || !next.has_value()) {
+            return std::nullopt;
+        }
+        if (*child != 0) {
+            pending.push_back(*child);
+        }
+        if (*next != 0) {
+            pending.push_back(*next);
+        }
+    }
+    return static_cast<uint32_t>(visited.size());
 }
 
 } // namespace meleeboard::hsd
