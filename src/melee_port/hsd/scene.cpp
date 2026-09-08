@@ -12,6 +12,8 @@ namespace {
 
 constexpr uint32_t kMaxSceneJoints = 8192;
 constexpr uint32_t kMaxSceneDrawObjects = 32768;
+constexpr uint32_t kMaxVertexDescriptors = 32;
+constexpr uint32_t kVertexDescriptorSize = 0x18;
 
 bool read_transform(const Archive& archive, uint32_t offset,
                     std::array<float, 3>& destination)
@@ -175,6 +177,60 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                 object.display_list_count =
                     static_cast<uint16_t>(*flags_and_display_count);
                 object.display_list = *display_list;
+
+                const uint32_t display_bytes =
+                    static_cast<uint32_t>(object.display_list_count) << 5;
+                if ((display_bytes != 0 && object.display_list == 0) ||
+                    !archive.contains_data_range(object.display_list,
+                                                 display_bytes)) {
+                    return false;
+                }
+
+                bool descriptors_terminated = object.vertex_description == 0;
+                for (uint32_t index = 0;
+                     object.vertex_description != 0 &&
+                     index < kMaxVertexDescriptors; ++index) {
+                    const uint32_t descriptor = object.vertex_description +
+                        index * kVertexDescriptorSize;
+                    const auto attribute = archive.data_word(descriptor);
+                    if (!attribute.has_value()) {
+                        return false;
+                    }
+                    if (*attribute == 0) {
+                        descriptors_terminated = true;
+                        break;
+                    }
+                    const auto attribute_type =
+                        archive.data_word(descriptor + 0x04);
+                    const auto component_count =
+                        archive.data_word(descriptor + 0x08);
+                    const auto component_type =
+                        archive.data_word(descriptor + 0x0C);
+                    const auto fraction_and_stride =
+                        archive.data_word(descriptor + 0x10);
+                    const auto vertex_data =
+                        archive.data_word(descriptor + 0x14);
+                    if (!attribute_type.has_value() ||
+                        !component_count.has_value() ||
+                        !component_type.has_value() ||
+                        !fraction_and_stride.has_value() ||
+                        !vertex_data.has_value()) {
+                        return false;
+                    }
+                    object.vertex_descriptors.push_back({
+                        .attribute = *attribute,
+                        .attribute_type = *attribute_type,
+                        .component_count = *component_count,
+                        .component_type = *component_type,
+                        .vertex_data = *vertex_data,
+                        .stride = static_cast<uint16_t>(*fraction_and_stride),
+                        .fraction = static_cast<uint8_t>(
+                            *fraction_and_stride >> 24),
+                    });
+                }
+                if (!descriptors_terminated) {
+                    return false;
+                }
             }
             const int32_t object_index =
                 static_cast<int32_t>(draw_objects_.size());

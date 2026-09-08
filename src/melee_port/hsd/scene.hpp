@@ -20,6 +20,18 @@ struct HostJoint {
     std::array<float, 3> translation{};
 };
 
+// GX vertex-array setup copied from a HSD_VtxDescList record.  The vertex
+// data remains in the archive until the host renderer uploads it.
+struct HostVertexDescriptor {
+    uint32_t attribute = 0;
+    uint32_t attribute_type = 0;
+    uint32_t component_count = 0;
+    uint32_t component_type = 0;
+    uint32_t vertex_data = 0;
+    uint16_t stride = 0;
+    uint8_t fraction = 0;
+};
+
 struct HostDrawObject {
     uint32_t source_offset = 0;
     uint32_t material_description = 0;
@@ -31,6 +43,7 @@ struct HostDrawObject {
     uint32_t display_list = 0;
     uint16_t primitive_flags = 0;
     uint16_t display_list_count = 0;
+    std::vector<HostVertexDescriptor> vertex_descriptors;
     int32_t next = -1;
 };
 

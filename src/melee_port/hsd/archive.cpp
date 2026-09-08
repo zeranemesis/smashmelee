@@ -143,11 +143,16 @@ std::optional<uint32_t> Archive::public_symbol_offset(
 
 std::optional<uint32_t> Archive::data_word(uint32_t data_offset) const
 {
-    if (!is_valid() || data_size_ < sizeof(uint32_t) ||
-        data_offset > data_size_ - sizeof(uint32_t)) {
+    if (!contains_data_range(data_offset, sizeof(uint32_t))) {
         return std::nullopt;
     }
     return read_be_u32(bytes_.data() + kHeaderSize + data_offset);
+}
+
+bool Archive::contains_data_range(uint32_t data_offset, uint32_t byte_count) const
+{
+    return is_valid() && data_offset <= data_size_ &&
+        byte_count <= data_size_ - data_offset;
 }
 
 std::optional<float> Archive::data_float(uint32_t data_offset) const
