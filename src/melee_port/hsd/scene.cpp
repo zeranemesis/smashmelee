@@ -520,7 +520,11 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                         .component_count = *component_count,
                         .component_type = *component_type,
                         .vertex_data = *vertex_data,
-                        .stride = static_cast<uint16_t>(*fraction_and_stride),
+                        // HSD stores these as u8 fraction, u8 stride, u16
+                        // padding.  Archive::data_word returns the big-endian
+                        // value, so stride is bits 16..23, not the low word.
+                        .stride = static_cast<uint16_t>(
+                            (*fraction_and_stride >> 16) & 0xFF),
                         .fraction = static_cast<uint8_t>(
                             *fraction_and_stride >> 24),
                     });
