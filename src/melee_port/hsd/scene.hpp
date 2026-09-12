@@ -62,6 +62,21 @@ struct HostMaterial {
     std::array<uint8_t, 4> specular{};
     float alpha = 1.0F;
     float shininess = 0.0F;
+    int32_t texture_index = -1;
+};
+
+// A host-owned copy of a TObj image.  Aurora's GX implementation may retain
+// the byte pointer until draw submission, so the data must not point into a
+// transient archive buffer or a GameCube address.
+struct HostTexture {
+    uint32_t source_offset = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    uint32_t format = 0;
+    uint32_t wrap_s = 0;
+    uint32_t wrap_t = 0;
+    bool mipmap = false;
+    std::vector<uint8_t> image_data;
 };
 
 struct HostDrawObject {
@@ -105,6 +120,7 @@ public:
     const std::vector<HostJoint>& joints() const;
     const std::vector<HostCamera>& cameras() const;
     const std::vector<HostMaterial>& materials() const;
+    const std::vector<HostTexture>& textures() const;
     const std::vector<HostDrawObject>& draw_objects() const;
     const std::vector<uint32_t>& model_roots() const;
     const std::string& last_error() const;
@@ -113,6 +129,7 @@ private:
     std::vector<HostJoint> joints_;
     std::vector<HostCamera> cameras_;
     std::vector<HostMaterial> materials_;
+    std::vector<HostTexture> textures_;
     std::vector<HostDrawObject> draw_objects_;
     std::vector<uint32_t> model_roots_;
     std::string last_error_;

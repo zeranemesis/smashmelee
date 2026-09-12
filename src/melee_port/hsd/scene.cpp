@@ -2,6 +2,8 @@
 
 #include <melee/sysdolphin/baselib/archive.hpp>
 
+#include <dolphin/gx/GXTexture.h>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -704,6 +706,84 @@ bool read_material(const Archive& archive, uint32_t description,
     return true;
 }
 
+bool read_u16(const Archive& archive, uint32_t offset, uint16_t& value)
+{
+    const auto high = archive.data_byte(offset);
+    const auto low = archive.data_byte(offset + 1);
+    if (!high.has_value() || !low.has_value()) {
+        return false;
+    }
+    value = static_cast<uint16_t>((static_cast<uint16_t>(*high) << 8) | *low);
+    return true;
+}
+
+bool supported_texture_format(uint32_t format)
+{
+    // Palette-backed C4/C8/C14X2 images need their HSD_TlutDesc chain.  They
+    // are deliberately postponed; all formats accepted here are directly
+    // consumable by GXInitTexObj.
+    switch (format) {
+    case 0x0: // GX_TF_I4
+    case 0x1: // GX_TF_I8
+    case 0x2: // GX_TF_IA4
+    case 0x3: // GX_TF_IA8
+    case 0x4: // GX_TF_RGB565
+    case 0x5: // GX_TF_RGB5A3
+    case 0x6: // GX_TF_RGBA8
+    case 0xE: // GX_TF_CMPR
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool read_texture(const Archive& archive, uint32_t texture_description,
+                  HostTexture& texture)
+{
+    // HSD_TObjDesc offsets are the on-disc 32-bit GameCube layout.
+    const auto image_description =
+        archive.data_pointer(texture_description + 0x4C);
+    const auto wrap_s = archive.data_word(texture_description + 0x34);
+    const auto wrap_t = archive.data_word(texture_description + 0x38);
+    if (!image_description.has_value() || !wrap_s.has_value() ||
+        !wrap_t.has_value() || *image_description == 0) {
+        return false;
+    }
+    const auto image_data = archive.data_pointer(*image_description);
+    const auto format = archive.data_word(*image_description + 0x08);
+    const auto mipmap = archive.data_word(*image_description + 0x0C);
+    const auto max_lod = archive.data_float(*image_description + 0x14);
+    if (!image_data.has_value() || !format.has_value() || !mipmap.has_value() ||
+        !max_lod.has_value() || !supported_texture_format(*format) ||
+        !std::isfinite(*max_lod) || *max_lod < 0.0F || *max_lod > 255.0F ||
+        !read_u16(archive, *image_description + 0x04, texture.width) ||
+        !read_u16(archive, *image_description + 0x06, texture.height) ||
+        texture.width == 0 || texture.height == 0) {
+        return false;
+    }
+    const bool has_mipmaps = *mipmap != 0;
+    const uint32_t image_size = GXGetTexBufferSize(
+        texture.width, texture.height, *format, has_mipmaps ? GX_TRUE : GX_FALSE,
+        static_cast<uint8_t>(std::ceil(*max_lod)));
+    if (image_size == 0 || !archive.contains_data_range(*image_data, image_size)) {
+        return false;
+    }
+    texture.source_offset = *image_description;
+    texture.format = *format;
+    texture.wrap_s = *wrap_s;
+    texture.wrap_t = *wrap_t;
+    texture.mipmap = has_mipmaps;
+    texture.image_data.resize(image_size);
+    for (uint32_t index = 0; index < image_size; ++index) {
+        const auto byte = archive.data_byte(*image_data + index);
+        if (!byte.has_value()) {
+            return false;
+        }
+        texture.image_data[index] = *byte;
+    }
+    return true;
+}
+
 } // namespace
 
 bool HostScene::load(const Archive& archive, std::string_view symbol)
@@ -711,6 +791,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
     joints_.clear();
     cameras_.clear();
     materials_.clear();
+    textures_.clear();
     draw_objects_.clear();
     model_roots_.clear();
     last_error_ = "could not resolve HSD scene roots";
@@ -825,6 +906,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
 
     last_error_ = "could not decode HSD draw objects";
     std::unordered_map<uint32_t, int32_t> material_indices;
+    std::unordered_map<uint32_t, int32_t> texture_indices;
     for (HostJoint& joint : joints_) {
         const auto first = archive.data_pointer(joint.source_offset + 0x10);
         if (!first.has_value()) {
@@ -866,7 +948,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                 object.texture_description = *texture_description;
                 object.material = *material_data;
                 if (*material_data != 0) {
-                    const auto existing = material_indices.find(*material_data);
+                    const auto existing = material_indices.find(*material);
                     if (existing != material_indices.end()) {
                         object.material_index = existing->second;
                     } else {
@@ -875,8 +957,24 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                                           host_material)) {
                             object.material_index =
                                 static_cast<int32_t>(materials_.size());
-                            material_indices.emplace(*material_data,
+                            material_indices.emplace(*material,
                                                      object.material_index);
+                            if (*texture_description != 0) {
+                                const auto texture = texture_indices.find(*texture_description);
+                                if (texture != texture_indices.end()) {
+                                    host_material.texture_index = texture->second;
+                                } else {
+                                    HostTexture host_texture{};
+                                    if (read_texture(archive, *texture_description,
+                                                     host_texture)) {
+                                        host_material.texture_index =
+                                            static_cast<int32_t>(textures_.size());
+                                        texture_indices.emplace(*texture_description,
+                                                                host_material.texture_index);
+                                        textures_.push_back(std::move(host_texture));
+                                    }
+                                }
+                            }
                             materials_.push_back(host_material);
                         }
                     }
@@ -1076,6 +1174,11 @@ const std::vector<HostCamera>& HostScene::cameras() const
 const std::vector<HostMaterial>& HostScene::materials() const
 {
     return materials_;
+}
+
+const std::vector<HostTexture>& HostScene::textures() const
+{
+    return textures_;
 }
 
 const std::vector<HostDrawObject>& HostScene::draw_objects() const

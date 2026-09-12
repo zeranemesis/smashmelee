@@ -93,6 +93,22 @@ GXColor material_color(const HostScene& scene, const HostDrawObject& object)
              static_cast<uint8_t>(std::lround(alpha * 255.0F)) };
 }
 
+const HostTexture* material_texture(const HostScene& scene,
+                                    const HostDrawObject& object)
+{
+    if (object.material_index < 0 ||
+        static_cast<size_t>(object.material_index) >= scene.materials().size()) {
+        return nullptr;
+    }
+    const int32_t texture_index =
+        scene.materials()[static_cast<size_t>(object.material_index)].texture_index;
+    if (texture_index < 0 || static_cast<size_t>(texture_index) >= scene.textures().size()) {
+        return nullptr;
+    }
+    const HostTexture& texture = scene.textures()[static_cast<size_t>(texture_index)];
+    return texture.image_data.empty() ? nullptr : &texture;
+}
+
 void apply_camera_viewport(const HostCamera& camera)
 {
     // This is the normal-camera path in HSD_CObjSetCurrent: CObj coordinates
@@ -274,11 +290,14 @@ void MeleeSceneRenderer::render()
     }
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
     GXSetNumChans(1);
     GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG,
                   GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
-    GXSetNumTexGens(0);
+    GXSetNumTexGens(1);
+    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
     GXSetTevOp(GX_TEVSTAGE0, GX_REPLACE);
@@ -295,6 +314,22 @@ void MeleeSceneRenderer::render()
         GXLoadPosMtxImm(model_view.data(), GX_PNMTX0);
         GXSetCurrentMtx(GX_PNMTX0);
         GXSetChanMatColor(GX_COLOR0A0, material_color(scene_, object));
+        const HostTexture* texture = material_texture(scene_, object);
+        if (texture != nullptr) {
+            GXTexObj texture_object{};
+            GXInitTexObj(&texture_object, texture->image_data.data(), texture->width,
+                         texture->height, static_cast<GXTexFmt>(texture->format),
+                         static_cast<GXTexWrapMode>(texture->wrap_s),
+                         static_cast<GXTexWrapMode>(texture->wrap_t),
+                         texture->mipmap ? GX_TRUE : GX_FALSE);
+            GXLoadTexObj(&texture_object, GX_TEXMAP0);
+            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+            GXSetTevOp(GX_TEVSTAGE0, GX_MODULATE);
+        } else {
+            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL,
+                          GX_COLOR0A0);
+            GXSetTevOp(GX_TEVSTAGE0, GX_REPLACE);
+        }
         for (size_t start = 0; start < object.triangle_indices.size();) {
             const size_t remaining = object.triangle_indices.size() - start;
             const size_t count = std::min<size_t>(remaining, 65535 / 3 * 3);
@@ -303,6 +338,15 @@ void MeleeSceneRenderer::render()
                 const uint32_t vertex = object.triangle_indices[index];
                 const auto& position = object.positions[vertex];
                 GXPosition3f32(position[0], position[1], position[2]);
+                if (texture != nullptr && index < object.triangle_texcoord_indices.size()) {
+                    const uint32_t texcoord = object.triangle_texcoord_indices[index];
+                    if (texcoord != UINT32_MAX && texcoord < object.texcoords.size()) {
+                        GXTexCoord2f32(object.texcoords[texcoord][0],
+                                       object.texcoords[texcoord][1]);
+                        continue;
+                    }
+                }
+                GXTexCoord2f32(0.0F, 0.0F);
             }
             GXEnd();
             start += count;
