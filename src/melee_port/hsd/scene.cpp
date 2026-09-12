@@ -32,6 +32,7 @@ constexpr uint32_t kGxIndex8 = 2;
 constexpr uint32_t kGxIndex16 = 3;
 constexpr uint32_t kGxPosition = 9;
 constexpr uint32_t kGxNormal = 10;
+constexpr uint32_t kGxTex0 = 13;
 
 bool parse_display_list(const Archive& archive, HostDrawObject& object)
 {
@@ -40,6 +41,8 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
     uint32_t position_index_width = 0;
     uint32_t normal_index_offset = UINT32_MAX;
     uint32_t normal_index_width = 0;
+    uint32_t texcoord_index_offset = UINT32_MAX;
+    uint32_t texcoord_index_width = 0;
     for (const HostVertexDescriptor& descriptor : object.vertex_descriptors) {
         uint32_t attribute_bytes = 0;
         switch (descriptor.attribute_type) {
@@ -76,6 +79,12 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
             normal_index_offset = bytes_per_vertex;
             normal_index_width = attribute_bytes;
         }
+        if (descriptor.attribute == kGxTex0 &&
+            (descriptor.attribute_type == kGxIndex8 ||
+             descriptor.attribute_type == kGxIndex16)) {
+            texcoord_index_offset = bytes_per_vertex;
+            texcoord_index_width = attribute_bytes;
+        }
         bytes_per_vertex += attribute_bytes;
     }
 
@@ -110,8 +119,10 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
 
         std::vector<uint32_t> position_indices;
         std::vector<uint32_t> normal_indices;
+        std::vector<uint32_t> texcoord_indices;
         position_indices.reserve(vertices);
         normal_indices.reserve(vertices);
+        texcoord_indices.reserve(vertices);
         for (uint32_t vertex = 0; vertex < vertices; ++vertex) {
             const uint32_t position_offset = cursor +
                 vertex * bytes_per_vertex + position_index_offset;
@@ -148,16 +159,33 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
                 }
             }
             normal_indices.push_back(normal_index);
+            uint32_t texcoord_index = UINT32_MAX;
+            if (texcoord_index_offset != UINT32_MAX) {
+                const auto texcoord_first = archive.data_byte(object.display_list +
+                    cursor + vertex * bytes_per_vertex + texcoord_index_offset);
+                if (!texcoord_first.has_value()) return false;
+                texcoord_index = *texcoord_first;
+                if (texcoord_index_width == 2) {
+                    const auto texcoord_second = archive.data_byte(object.display_list +
+                        cursor + vertex * bytes_per_vertex + texcoord_index_offset + 1);
+                    if (!texcoord_second.has_value()) return false;
+                    texcoord_index = (texcoord_index << 8) | *texcoord_second;
+                }
+            }
+            texcoord_indices.push_back(texcoord_index);
         }
-        const auto append_triangle = [&object, &position_indices, &normal_indices](uint32_t a,
-                                                                                     uint32_t b,
-                                                                                     uint32_t c) {
+        const auto append_triangle = [&object, &position_indices, &normal_indices,
+                                      &texcoord_indices](uint32_t a, uint32_t b,
+                                                        uint32_t c) {
             object.triangle_position_indices.push_back(position_indices[a]);
             object.triangle_position_indices.push_back(position_indices[b]);
             object.triangle_position_indices.push_back(position_indices[c]);
             object.triangle_normal_indices.push_back(normal_indices[a]);
             object.triangle_normal_indices.push_back(normal_indices[b]);
             object.triangle_normal_indices.push_back(normal_indices[c]);
+            object.triangle_texcoord_indices.push_back(texcoord_indices[a]);
+            object.triangle_texcoord_indices.push_back(texcoord_indices[b]);
+            object.triangle_texcoord_indices.push_back(texcoord_indices[c]);
         };
         const uint8_t primitive = *command & kGxOpcodeMask;
         switch (primitive) {
@@ -423,6 +451,75 @@ bool materialize_normals(const Archive& archive, HostDrawObject& object,
     return true;
 }
 
+bool materialize_texcoords(const Archive& archive, HostDrawObject& object,
+                           std::string& error)
+{
+    if (object.triangle_texcoord_indices.empty() ||
+        std::all_of(object.triangle_texcoord_indices.begin(),
+                    object.triangle_texcoord_indices.end(),
+                    [](uint32_t index) { return index == UINT32_MAX; })) return true;
+    const auto descriptor = std::find_if(object.vertex_descriptors.begin(),
+        object.vertex_descriptors.end(), [](const HostVertexDescriptor& candidate) {
+            return candidate.attribute == kGxTex0;
+        });
+    if (descriptor == object.vertex_descriptors.end() ||
+        (descriptor->attribute_type != kGxIndex8 && descriptor->attribute_type != kGxIndex16)) {
+        error = "texture stream has no indexed TEX0 descriptor";
+        return false;
+    }
+    uint32_t component_size = 0;
+    switch (descriptor->component_type) {
+    case 0: case 1: component_size = 1; break;
+    case 2: case 3: component_size = 2; break;
+    case 4: component_size = 4; break;
+    default: error = "texture descriptor has an unsupported component type"; return false;
+    }
+    const uint32_t component_count = descriptor->component_count == 0 ? 1 : 2;
+    if (descriptor->component_count > 1 || descriptor->stride < component_size * component_count) {
+        error = "texture descriptor has an unsupported component count or stride";
+        return false;
+    }
+    std::unordered_map<uint32_t, uint32_t> host_indices;
+    for (uint32_t& source_index : object.triangle_texcoord_indices) {
+        if (source_index == UINT32_MAX) continue;
+        const auto existing = host_indices.find(source_index);
+        if (existing != host_indices.end()) { source_index = existing->second; continue; }
+        const uint64_t source_offset = static_cast<uint64_t>(descriptor->vertex_data) +
+            static_cast<uint64_t>(source_index) * descriptor->stride;
+        if (source_offset > std::numeric_limits<uint32_t>::max() ||
+            !archive.contains_data_range(static_cast<uint32_t>(source_offset),
+                                         component_size * component_count)) {
+            error = "texture index points outside the HSD vertex array";
+            return false;
+        }
+        std::array<float, 2> texcoord{};
+        for (uint32_t component = 0; component < component_count; ++component) {
+            const uint32_t at = static_cast<uint32_t>(source_offset) + component * component_size;
+            if (descriptor->component_type == 4) {
+                const auto value = archive.data_float(at);
+                if (!value.has_value()) { error = "floating-point texture coordinate lies outside the HSD data"; return false; }
+                texcoord[component] = *value;
+            } else {
+                const auto first = archive.data_byte(at);
+                if (!first.has_value()) { error = "integer texture coordinate lies outside the HSD data"; return false; }
+                int32_t value = *first;
+                if (component_size == 2) {
+                    const auto second = archive.data_byte(at + 1);
+                    if (!second.has_value()) { error = "16-bit texture coordinate lies outside the HSD data"; return false; }
+                    value = (value << 8) | *second;
+                    if (descriptor->component_type == 3) value = static_cast<int16_t>(value);
+                } else if (descriptor->component_type == 1) value = static_cast<int8_t>(value);
+                texcoord[component] = std::ldexp(static_cast<float>(value), -static_cast<int>(descriptor->fraction));
+            }
+        }
+        const uint32_t host_index = static_cast<uint32_t>(object.texcoords.size());
+        object.texcoords.push_back(texcoord);
+        host_indices.emplace(source_index, host_index);
+        source_index = host_index;
+    }
+    return true;
+}
+
 bool materialize_primitive(const Archive& archive, uint32_t primitive,
                            HostDrawObject& object, std::string& error)
 {
@@ -483,6 +580,12 @@ bool materialize_primitive(const Archive& archive, uint32_t primitive,
         object.normals.clear();
         std::fill(object.triangle_normal_indices.begin(),
                   object.triangle_normal_indices.end(), UINT32_MAX);
+    }
+    std::string texcoord_error;
+    if (!materialize_texcoords(archive, object, texcoord_error)) {
+        object.texcoords.clear();
+        std::fill(object.triangle_texcoord_indices.begin(),
+                  object.triangle_texcoord_indices.end(), UINT32_MAX);
     }
     return true;
 }
@@ -814,6 +917,12 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                     object.normals.clear();
                     std::fill(object.triangle_normal_indices.begin(),
                               object.triangle_normal_indices.end(), UINT32_MAX);
+                }
+                std::string texcoord_error;
+                if (!materialize_texcoords(archive, object, texcoord_error)) {
+                    object.texcoords.clear();
+                    std::fill(object.triangle_texcoord_indices.begin(),
+                              object.triangle_texcoord_indices.end(), UINT32_MAX);
                 }
             }
             const int32_t object_index =
