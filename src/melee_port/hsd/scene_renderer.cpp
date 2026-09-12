@@ -317,11 +317,25 @@ void MeleeSceneRenderer::render()
         const HostTexture* texture = material_texture(scene_, object);
         if (texture != nullptr) {
             GXTexObj texture_object{};
-            GXInitTexObj(&texture_object, texture->image_data.data(), texture->width,
-                         texture->height, static_cast<GXTexFmt>(texture->format),
-                         static_cast<GXTexWrapMode>(texture->wrap_s),
-                         static_cast<GXTexWrapMode>(texture->wrap_t),
-                         texture->mipmap ? GX_TRUE : GX_FALSE);
+            if (!texture->palette_data.empty()) {
+                GXTlutObj palette_object{};
+                GXInitTlutObj(&palette_object, texture->palette_data.data(),
+                              static_cast<GXTlutFmt>(texture->palette_format),
+                              texture->palette_entries);
+                GXLoadTlut(&palette_object, GX_TLUT0);
+                GXInitTexObjCI(&texture_object, texture->image_data.data(),
+                               texture->width, texture->height,
+                               static_cast<GXCITexFmt>(texture->format),
+                               static_cast<GXTexWrapMode>(texture->wrap_s),
+                               static_cast<GXTexWrapMode>(texture->wrap_t),
+                               texture->mipmap ? GX_TRUE : GX_FALSE, GX_TLUT0);
+            } else {
+                GXInitTexObj(&texture_object, texture->image_data.data(), texture->width,
+                             texture->height, static_cast<GXTexFmt>(texture->format),
+                             static_cast<GXTexWrapMode>(texture->wrap_s),
+                             static_cast<GXTexWrapMode>(texture->wrap_t),
+                             texture->mipmap ? GX_TRUE : GX_FALSE);
+            }
             GXLoadTexObj(&texture_object, GX_TEXMAP0);
             GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
             GXSetTevOp(GX_TEVSTAGE0, GX_MODULATE);

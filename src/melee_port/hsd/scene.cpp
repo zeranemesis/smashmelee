@@ -719,9 +719,8 @@ bool read_u16(const Archive& archive, uint32_t offset, uint16_t& value)
 
 bool supported_texture_format(uint32_t format)
 {
-    // Palette-backed C4/C8/C14X2 images need their HSD_TlutDesc chain.  They
-    // are deliberately postponed; all formats accepted here are directly
-    // consumable by GXInitTexObj.
+    // These formats are directly consumable by GXInitTexObj.  Palette-backed
+    // C4/C8/C14X2 are handled separately through their HSD_TlutDesc chain.
     switch (format) {
     case 0x0: // GX_TF_I4
     case 0x1: // GX_TF_I8
@@ -735,6 +734,11 @@ bool supported_texture_format(uint32_t format)
     default:
         return false;
     }
+}
+
+bool paletted_texture_format(uint32_t format)
+{
+    return format == 0x8 || format == 0x9 || format == 0xA;
 }
 
 bool read_texture(const Archive& archive, uint32_t texture_description,
@@ -754,7 +758,8 @@ bool read_texture(const Archive& archive, uint32_t texture_description,
     const auto mipmap = archive.data_word(*image_description + 0x0C);
     const auto max_lod = archive.data_float(*image_description + 0x14);
     if (!image_data.has_value() || !format.has_value() || !mipmap.has_value() ||
-        !max_lod.has_value() || !supported_texture_format(*format) ||
+        !max_lod.has_value() ||
+        !(supported_texture_format(*format) || paletted_texture_format(*format)) ||
         !std::isfinite(*max_lod) || *max_lod < 0.0F || *max_lod > 255.0F ||
         !read_u16(archive, *image_description + 0x04, texture.width) ||
         !read_u16(archive, *image_description + 0x06, texture.height) ||
@@ -780,6 +785,36 @@ bool read_texture(const Archive& archive, uint32_t texture_description,
             return false;
         }
         texture.image_data[index] = *byte;
+    }
+    if (paletted_texture_format(*format)) {
+        const auto palette_description =
+            archive.data_pointer(texture_description + 0x50);
+        if (!palette_description.has_value() || *palette_description == 0) {
+            return false;
+        }
+        const auto palette_data = archive.data_pointer(*palette_description);
+        const auto palette_format = archive.data_word(*palette_description + 0x04);
+        if (!palette_data.has_value() || !palette_format.has_value() ||
+            !read_u16(archive, *palette_description + 0x0C,
+                      texture.palette_entries) ||
+            texture.palette_entries == 0 ||
+            texture.palette_entries > 16384) {
+            return false;
+        }
+        const uint32_t palette_bytes =
+            static_cast<uint32_t>(texture.palette_entries) * sizeof(uint16_t);
+        if (!archive.contains_data_range(*palette_data, palette_bytes)) {
+            return false;
+        }
+        texture.palette_format = *palette_format;
+        texture.palette_data.resize(palette_bytes);
+        for (uint32_t index = 0; index < palette_bytes; ++index) {
+            const auto byte = archive.data_byte(*palette_data + index);
+            if (!byte.has_value()) {
+                return false;
+            }
+            texture.palette_data[index] = *byte;
+        }
     }
     return true;
 }

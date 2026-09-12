@@ -54,9 +54,9 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       `HSD_CObjSetCurrent`;
 - [x] materialize host-safe `HSD_Material` records and apply their diffuse
       color and alpha to supported untextured draw objects;
-- [x] materialize and render first-level HSD TObj images in direct GX formats
-      with indexed TEX0 coordinates; palette-backed TObj images and complete
-      TEV chains remain unsupported;
+- [x] materialize and render first-level HSD TObj images, including direct and
+      palette-backed GX formats, with indexed TEX0 coordinates; complete TEV
+      chains remain unsupported;
 - import the upstream `Runtime`, `sysdolphin`, and required `melee/lb` headers/sources;
 - make pointer-width and endian assumptions explicit;
 - compile object/class allocation, GObj scheduling, VI, and GX initialization;

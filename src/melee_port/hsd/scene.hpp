@@ -76,7 +76,10 @@ struct HostTexture {
     uint32_t wrap_s = 0;
     uint32_t wrap_t = 0;
     bool mipmap = false;
+    uint32_t palette_format = 0;
+    uint16_t palette_entries = 0;
     std::vector<uint8_t> image_data;
+    std::vector<uint8_t> palette_data;
 };
 
 struct HostDrawObject {
