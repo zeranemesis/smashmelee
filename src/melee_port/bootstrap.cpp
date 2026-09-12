@@ -14,11 +14,13 @@
 #include <aurora/aurora.h>
 #include <aurora/event.h>
 #include <aurora/lib/logging.hpp>
+#include <dolphin/pad.h>
 #include <dolphin/vi.h>
 #include <port/main.h>
 #include <port/settings.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <memory>
 #include <string>
@@ -27,6 +29,47 @@
 namespace {
 
 aurora::Module MeleeBootstrapLog("meleeboard::bootstrap");
+
+constexpr std::array<const char*, 5> kMainMenuNames = {
+    "1-P Mode", "VS. Mode", "Trophies", "Options", "Data",
+};
+
+struct MainMenuInput {
+    uint16_t previous_buttons = 0;
+    int8_t previous_stick_direction = 0;
+    uint8_t selection = 0;
+
+    bool poll(bool& confirm)
+    {
+        PADStatus pads[PAD_MAX_CONTROLLERS]{};
+        PADRead(pads);
+        uint16_t buttons = 0;
+        int8_t stick_direction = 0;
+        for (const PADStatus& pad : pads) {
+            if (pad.err != PAD_ERR_NONE) continue;
+            buttons |= pad.button;
+            if (pad.stickY >= 40) stick_direction = 1;
+            else if (pad.stickY <= -40) stick_direction = -1;
+        }
+        const uint16_t pressed = buttons & ~previous_buttons;
+        const bool stick_pressed = stick_direction != 0 &&
+            stick_direction != previous_stick_direction;
+        previous_buttons = buttons;
+        previous_stick_direction = stick_direction;
+        confirm = (pressed & (PAD_BUTTON_A | PAD_BUTTON_START)) != 0;
+
+        int direction = 0;
+        if ((pressed & PAD_BUTTON_UP) != 0 ||
+            (stick_pressed && stick_direction > 0)) direction = -1;
+        else if ((pressed & PAD_BUTTON_DOWN) != 0 ||
+                 (stick_pressed && stick_direction < 0)) direction = 1;
+        if (direction == 0) return false;
+        selection = static_cast<uint8_t>(
+            (selection + kMainMenuNames.size() + direction) %
+            kMainMenuNames.size());
+        return true;
+    }
+};
 
 } // namespace
 
@@ -65,8 +108,11 @@ extern "C" int game_main(void)
     meleeboard::hsd::HostAnimation menu_animation;
     meleeboard::hsd::HostScene menu_panel;
     meleeboard::hsd::HostAnimation menu_panel_animation;
+    meleeboard::hsd::HostScene menu_content;
+    meleeboard::hsd::HostAnimation menu_content_animation;
     bool menu_ready = false;
     bool menu_panel_ready = false;
+    bool menu_content_ready = false;
     std::vector<unsigned char> menu_bytes;
     if (meleeboard::disc::read_file("MnMaAll.dat", menu_bytes)) {
         meleeboard::hsd::Archive menu_archive;
@@ -98,6 +144,19 @@ extern "C" int game_main(void)
                 menu_panel_animation.joints().size(), panel_joints.value_or(0),
                 menu_panel.draw_objects().size(),
                 menu_panel_ready ? "panel decoded" : menu_panel.last_error());
+            const auto content_joints =
+                menu_archive.joint_tree_count("MenMainConTop_Top_joint");
+            menu_content_ready = menu_content_animation.load(
+                    menu_archive, "MenMainConTop_Top_animjoint") &&
+                menu_content.load_joint(menu_archive, "MenMainConTop_Top_joint") &&
+                menu_content.load_camera(menu_archive, "ScMenMain_cam_int1_camera") &&
+                content_joints.has_value() &&
+                *content_joints == menu_content_animation.joints().size();
+            MeleeBootstrapLog.info(
+                "MnMaAll.dat main-menu choices: {} animation joints, {} model joints, {} draw objects ({})",
+                menu_content_animation.joints().size(), content_joints.value_or(0),
+                menu_content.draw_objects().size(),
+                menu_content_ready ? "choices decoded" : menu_content.last_error());
         } else {
             MeleeBootstrapLog.warn(
                 "Could not materialize MnMaAll.dat's MenMainBack animation");
@@ -116,19 +175,23 @@ extern "C" int game_main(void)
         meleeboard::disc::unmount();
         return 1;
     }
+    MeleeBootstrapLog.debug("standScene materialization complete");
     if (!meleeboard::hsd::initialize_host_runtime()) {
         MeleeBootstrapLog.error("HSD host runtime self-test failed");
         meleeboard::disc::unmount();
         return 1;
     }
+    MeleeBootstrapLog.debug("HSD host runtime self-test complete");
     meleeboard::hsd::HostAnimationPlayer menu_player;
     meleeboard::hsd::HostAnimationPlayer menu_panel_player;
+    meleeboard::hsd::HostAnimationPlayer menu_content_player;
     if (menu_ready) {
         std::vector<uint32_t> mapping(menu_animation.joints().size());
         for (uint32_t index = 0; index < mapping.size(); ++index) {
             mapping[index] = index;
         }
         menu_ready = menu_player.attach(menu_animation, menu_model.joints(), mapping);
+        MeleeBootstrapLog.debug("MenMainBack animation attach: {}", menu_ready);
     }
     if (menu_panel_ready) {
         std::vector<uint32_t> mapping(menu_panel_animation.joints().size());
@@ -137,6 +200,19 @@ extern "C" int game_main(void)
         }
         menu_panel_ready = menu_panel_player.attach(
             menu_panel_animation, menu_panel.joints(), mapping);
+        MeleeBootstrapLog.debug("MenMainPanel animation attach: {}", menu_panel_ready);
+    }
+    if (menu_content_ready) {
+        std::vector<uint32_t> mapping(menu_content_animation.joints().size());
+        for (uint32_t index = 0; index < mapping.size(); ++index) {
+            mapping[index] = index;
+        }
+        menu_content_ready = menu_content_player.attach(
+            menu_content_animation, menu_content.joints(), mapping);
+        MeleeBootstrapLog.debug("MenMainConTop animation attach: {}", menu_content_ready);
+        // mn_8022B3A0 applies selection zero's hover loop to traversal node 14.
+        menu_content_ready = menu_content_ready &&
+            menu_content_player.request_subtree(14, 0.0F);
     }
     MeleeBootstrapLog.info(
         "Mounted {}; materialized standScene with {} models, {} joints, {} draw objects, {} materials, and {} direct textures (M={:#x} C={:#x} L={:#x} F={:#x}); entering bootstrap loop",
@@ -148,9 +224,19 @@ extern "C" int game_main(void)
     meleeboard::hsd::HostScene& displayed_scene = menu_ready ? menu_model : host_scene;
     meleeboard::hsd::MeleeSceneRenderer scene_renderer(displayed_scene);
     std::unique_ptr<meleeboard::hsd::MeleeSceneRenderer> panel_renderer;
+    std::unique_ptr<meleeboard::hsd::MeleeSceneRenderer> content_renderer;
     if (menu_ready && menu_panel_ready) {
         panel_renderer =
             std::make_unique<meleeboard::hsd::MeleeSceneRenderer>(menu_panel);
+    }
+    if (menu_ready && menu_content_ready) {
+        content_renderer =
+            std::make_unique<meleeboard::hsd::MeleeSceneRenderer>(menu_content);
+        MeleeBootstrapLog.info(
+            "MenMainConTop renderer: {} drawable objects, {} skipped objects, {} triangles",
+            content_renderer->drawable_object_count(),
+            content_renderer->skipped_object_count(),
+            content_renderer->submitted_triangle_count());
     }
     MeleeBootstrapLog.info(
         "{} renderer: {} drawable objects, {} skipped objects, {} triangles",
@@ -168,6 +254,9 @@ extern "C" int game_main(void)
     constexpr uint32_t kMaxCatchUpSteps = 4;
     auto previous_tick = Clock::now();
     std::chrono::duration<double> simulation_accumulator = kSimulationStep;
+    MainMenuInput menu_input;
+    uint32_t hover_ticks = 0;
+    PADInit();
 
     while (PartyBoard_IsRunning) {
         const AuroraEvent* event = aurora_update();
@@ -203,6 +292,34 @@ extern "C" int game_main(void)
             if (menu_panel_ready) {
                 menu_panel_player.tick();
             }
+            if (menu_content_ready) {
+                bool confirm = false;
+                if (menu_input.poll(confirm)) {
+                    hover_ticks = 0;
+                    const float start_frame =
+                        static_cast<float>(menu_input.selection) * 50.0F;
+                    menu_content_player.request_subtree(14, start_frame);
+                    const std::string title = std::string("Melee native port - ") +
+                        kMainMenuNames[menu_input.selection];
+                    VISetWindowTitle(title.c_str());
+                    MeleeBootstrapLog.info("Main-menu selection: {} ({})",
+                                           kMainMenuNames[menu_input.selection],
+                                           menu_input.selection);
+                }
+                if (confirm) {
+                    MeleeBootstrapLog.info(
+                        "Main-menu confirm requested for {}; scene transition is the next native-port boundary",
+                        kMainMenuNames[menu_input.selection]);
+                }
+                ++hover_ticks;
+                if (hover_ticks == 50 ||
+                    (hover_ticks > 50 && (hover_ticks - 50) % 30 == 0)) {
+                    const float loop_frame =
+                        static_cast<float>(menu_input.selection) * 50.0F + 20.0F;
+                    menu_content_player.request_subtree(14, loop_frame);
+                }
+                menu_content_player.tick();
+            }
             simulation_accumulator -= kSimulationStep;
             ++steps;
         }
@@ -214,6 +331,9 @@ extern "C" int game_main(void)
         scene_renderer.render();
         if (panel_renderer != nullptr) {
             panel_renderer->render();
+        }
+        if (content_renderer != nullptr) {
+            content_renderer->render();
         }
         aurora_end_frame();
     }

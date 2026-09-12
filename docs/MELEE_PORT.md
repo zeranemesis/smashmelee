@@ -65,6 +65,11 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       `ScMenMain_cam_int1_camera` from `MnMaAll.dat`;
 - [x] decode and layer the animated `MenMainPanel_Top` hierarchy (106 joints,
       47 draw objects), including direct GX CLR0 formats expanded to RGBA8;
+- [x] mirror `lb_80011E24` pre-order joint addressing for host animation
+      subtrees and render `MenMainConTop_Top` (42 joints, 20 draw objects),
+      the original layer containing the five top-level menu choices;
+- [x] read Aurora PAD/keyboard state at 60 Hz and drive the top-level hover
+      animation ranges from `mn_803EB3FC` with D-pad or analog-stick input;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] advance the host HSD/GObj simulation on a bounded fixed 60 Hz clock,

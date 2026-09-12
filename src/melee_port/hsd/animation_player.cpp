@@ -47,6 +47,35 @@ bool HostAnimationPlayer::attach(const HostAnimation& animation,
 {
     clear();
     if (joint_mapping.size() != animation.joints().size()) return false;
+    playback_by_joint_.assign(animation.joints().size(), -1);
+    child_by_joint_.resize(animation.joints().size());
+    sibling_by_joint_.resize(animation.joints().size());
+    for (size_t index = 0; index < animation.joints().size(); ++index) {
+        child_by_joint_[index] = animation.joints()[index].child;
+        sibling_by_joint_[index] = animation.joints()[index].sibling;
+    }
+    if (!animation.joints().empty()) {
+        std::vector<uint32_t> pending{ 0 };
+        std::vector<bool> visited(animation.joints().size(), false);
+        while (!pending.empty()) {
+            const uint32_t index = pending.back();
+            pending.pop_back();
+            if (index >= animation.joints().size() || visited[index]) {
+                clear();
+                return false;
+            }
+            visited[index] = true;
+            preorder_joints_.push_back(index);
+            const int32_t sibling = sibling_by_joint_[index];
+            const int32_t child = child_by_joint_[index];
+            if (sibling >= 0) pending.push_back(static_cast<uint32_t>(sibling));
+            if (child >= 0) pending.push_back(static_cast<uint32_t>(child));
+        }
+        if (preorder_joints_.size() != animation.joints().size()) {
+            clear();
+            return false;
+        }
+    }
     HSD_AObjInitAllocData();
     HSD_FObjInitAllocData();
     for (size_t index = 0; index < animation.joints().size(); ++index) {
@@ -55,6 +84,8 @@ bool HostAnimationPlayer::attach(const HostAnimation& animation,
         if (joint_mapping[index] >= joints.size()) { clear(); return false; }
         playback_.emplace_back();
         Playback& target = playback_.back();
+        playback_by_joint_[index] =
+            static_cast<int32_t>(playback_.size() - 1);
         target.joint = &joints[joint_mapping[index]];
         target.object = HSD_AObjAlloc();
         if (target.object == nullptr) { clear(); return false; }
@@ -87,6 +118,31 @@ void HostAnimationPlayer::request(float frame)
     for (Playback& entry : playback_) HSD_AObjReqAnim(entry.object, frame);
 }
 
+bool HostAnimationPlayer::request_subtree(uint32_t traversal_index, float frame)
+{
+    if (traversal_index >= preorder_joints_.size()) return false;
+    std::vector<uint32_t> pending{ preorder_joints_[traversal_index] };
+    std::vector<bool> visited(playback_by_joint_.size(), false);
+    while (!pending.empty()) {
+        const uint32_t index = pending.back();
+        pending.pop_back();
+        if (index >= visited.size() || visited[index]) return false;
+        visited[index] = true;
+        const int32_t playback = playback_by_joint_[index];
+        if (playback >= 0) {
+            HSD_AObjReqAnim(playback_[static_cast<size_t>(playback)].object, frame);
+        }
+        size_t sibling_count = 0;
+        for (int32_t child = child_by_joint_[index]; child >= 0;
+             child = sibling_by_joint_[static_cast<size_t>(child)]) {
+            if (static_cast<size_t>(child) >= child_by_joint_.size() ||
+                ++sibling_count > child_by_joint_.size()) return false;
+            pending.push_back(static_cast<uint32_t>(child));
+        }
+    }
+    return true;
+}
+
 void HostAnimationPlayer::tick()
 {
     for (Playback& entry : playback_)
@@ -97,6 +153,10 @@ void HostAnimationPlayer::clear()
 {
     for (Playback& entry : playback_) HSD_AObjRemove(entry.object);
     playback_.clear();
+    playback_by_joint_.clear();
+    child_by_joint_.clear();
+    sibling_by_joint_.clear();
+    preorder_joints_.clear();
 }
 
 } // namespace meleeboard::hsd

@@ -20,6 +20,10 @@ public:
     bool attach(const HostAnimation& animation, std::vector<HostJoint>& joints,
                 const std::vector<uint32_t>& joint_mapping);
     void request(float frame);
+    // Mirrors lb_80011E24 + HSD_JObjReqAnimAll: traversal_index is the
+    // pre-order index used throughout Melee's menu code, not our storage
+    // vector index. The selected joint and all of its descendants are reset.
+    bool request_subtree(uint32_t traversal_index, float frame);
     void tick();
     void clear();
 
@@ -30,6 +34,10 @@ private:
         std::vector<std::vector<uint8_t>> bytecode;
     };
     std::vector<Playback> playback_;
+    std::vector<int32_t> playback_by_joint_;
+    std::vector<int32_t> child_by_joint_;
+    std::vector<int32_t> sibling_by_joint_;
+    std::vector<uint32_t> preorder_joints_;
 };
 
 } // namespace meleeboard::hsd
