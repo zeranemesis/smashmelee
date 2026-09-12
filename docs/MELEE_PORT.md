@@ -63,6 +63,8 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       Hz, retaining `standScene` as the safe fallback;
 - [x] resolve and apply the separately exported main-menu camera
       `ScMenMain_cam_int1_camera` from `MnMaAll.dat`;
+- [x] decode and layer the animated `MenMainPanel_Top` hierarchy (106 joints,
+      47 draw objects), including direct GX CLR0 formats expanded to RGBA8;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] advance the host HSD/GObj simulation on a bounded fixed 60 Hz clock,

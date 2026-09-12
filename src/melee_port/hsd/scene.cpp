@@ -34,7 +34,79 @@ constexpr uint32_t kGxIndex8 = 2;
 constexpr uint32_t kGxIndex16 = 3;
 constexpr uint32_t kGxPosition = 9;
 constexpr uint32_t kGxNormal = 10;
+constexpr uint32_t kGxColor0 = 11;
+constexpr uint32_t kGxColor1 = 12;
 constexpr uint32_t kGxTex0 = 13;
+
+uint32_t direct_color_size(const HostVertexDescriptor& descriptor)
+{
+    if (descriptor.attribute != kGxColor0 && descriptor.attribute != kGxColor1) {
+        return 0;
+    }
+    switch (descriptor.component_type) {
+    case 0: return 2; // GX_RGB565
+    case 1: return 3; // GX_RGB8
+    case 2: return 4; // GX_RGBX8
+    case 3: return 2; // GX_RGBA4
+    case 4: return 3; // GX_RGBA6
+    case 5: return 4; // GX_RGBA8
+    default: return 0;
+    }
+}
+
+bool read_direct_color(const Archive& archive, uint32_t offset, uint32_t type,
+                       std::array<uint8_t, 4>& color)
+{
+    const auto byte = [&archive, offset](uint32_t index) {
+        return archive.data_byte(offset + index);
+    };
+    const auto b0 = byte(0);
+    const auto b1 = byte(1);
+    if (!b0 || !b1) return false;
+    color = { 255, 255, 255, 255 };
+    switch (type) {
+    case 0: { // RGB565
+        const uint16_t packed = static_cast<uint16_t>(*b0 << 8U) | *b1;
+        color[0] = static_cast<uint8_t>(((packed >> 11U) & 0x1FU) * 255U / 31U);
+        color[1] = static_cast<uint8_t>(((packed >> 5U) & 0x3FU) * 255U / 63U);
+        color[2] = static_cast<uint8_t>((packed & 0x1FU) * 255U / 31U);
+        return true;
+    }
+    case 1: { // RGB8
+        const auto b2 = byte(2); if (!b2) return false;
+        color = { *b0, *b1, *b2, 255 }; return true;
+    }
+    case 2: { // RGBX8
+        const auto b2 = byte(2); const auto b3 = byte(3);
+        if (!b2 || !b3) return false;
+        color = { *b0, *b1, *b2, 255 }; return true;
+    }
+    case 3: { // RGBA4
+        color = { static_cast<uint8_t>((*b0 >> 4U) * 17U),
+                  static_cast<uint8_t>((*b0 & 0xFU) * 17U),
+                  static_cast<uint8_t>((*b1 >> 4U) * 17U),
+                  static_cast<uint8_t>((*b1 & 0xFU) * 17U) };
+        return true;
+    }
+    case 4: { // RGBA6
+        const auto b2 = byte(2); if (!b2) return false;
+        const uint32_t packed = (*b0 << 16U) | (*b1 << 8U) | *b2;
+        const auto expand = [](uint32_t value) {
+            return static_cast<uint8_t>((value << 2U) | (value >> 4U));
+        };
+        color = { expand((packed >> 18U) & 0x3FU),
+                  expand((packed >> 12U) & 0x3FU),
+                  expand((packed >> 6U) & 0x3FU), expand(packed & 0x3FU) };
+        return true;
+    }
+    case 5: { // RGBA8
+        const auto b2 = byte(2); const auto b3 = byte(3);
+        if (!b2 || !b3) return false;
+        color = { *b0, *b1, *b2, *b3 }; return true;
+    }
+    default: return false;
+    }
+}
 
 bool parse_display_list(const Archive& archive, HostDrawObject& object)
 {
@@ -45,6 +117,8 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
     uint32_t normal_index_width = 0;
     uint32_t texcoord_index_offset = UINT32_MAX;
     uint32_t texcoord_index_width = 0;
+    uint32_t color_offset = UINT32_MAX;
+    uint32_t color_type = 0;
     for (const HostVertexDescriptor& descriptor : object.vertex_descriptors) {
         uint32_t attribute_bytes = 0;
         switch (descriptor.attribute_type) {
@@ -57,12 +131,17 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
             attribute_bytes = 2;
             break;
         case kGxDirect:
-            // Matrix indices are the only direct fields emitted by the HSD
-            // model lists handled here; each occupies one byte in GX FIFO.
-            if (descriptor.attribute > 8) {
+            // Matrix indices occupy one byte. Menu panels additionally emit
+            // direct CLR0/CLR1 values; account for them in the FIFO stride
+            // even while the debug material path ignores per-vertex color.
+            if (descriptor.attribute <= 8) {
+                attribute_bytes = 1;
+            } else {
+                attribute_bytes = direct_color_size(descriptor);
+            }
+            if (attribute_bytes == 0) {
                 return false;
             }
-            attribute_bytes = 1;
             break;
         default:
             return false;
@@ -86,6 +165,11 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
              descriptor.attribute_type == kGxIndex16)) {
             texcoord_index_offset = bytes_per_vertex;
             texcoord_index_width = attribute_bytes;
+        }
+        if (descriptor.attribute == kGxColor0 &&
+            descriptor.attribute_type == kGxDirect) {
+            color_offset = bytes_per_vertex;
+            color_type = descriptor.component_type;
         }
         bytes_per_vertex += attribute_bytes;
     }
@@ -122,9 +206,11 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
         std::vector<uint32_t> position_indices;
         std::vector<uint32_t> normal_indices;
         std::vector<uint32_t> texcoord_indices;
+        std::vector<std::array<uint8_t, 4>> colors;
         position_indices.reserve(vertices);
         normal_indices.reserve(vertices);
         texcoord_indices.reserve(vertices);
+        colors.reserve(vertices);
         for (uint32_t vertex = 0; vertex < vertices; ++vertex) {
             const uint32_t position_offset = cursor +
                 vertex * bytes_per_vertex + position_index_offset;
@@ -175,9 +261,16 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
                 }
             }
             texcoord_indices.push_back(texcoord_index);
+            std::array<uint8_t, 4> color{ 255, 255, 255, 255 };
+            if (color_offset != UINT32_MAX &&
+                !read_direct_color(archive, object.display_list + cursor +
+                    vertex * bytes_per_vertex + color_offset, color_type, color)) {
+                return false;
+            }
+            colors.push_back(color);
         }
         const auto append_triangle = [&object, &position_indices, &normal_indices,
-                                      &texcoord_indices](uint32_t a, uint32_t b,
+                                      &texcoord_indices, &colors](uint32_t a, uint32_t b,
                                                         uint32_t c) {
             object.triangle_position_indices.push_back(position_indices[a]);
             object.triangle_position_indices.push_back(position_indices[b]);
@@ -188,6 +281,9 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
             object.triangle_texcoord_indices.push_back(texcoord_indices[a]);
             object.triangle_texcoord_indices.push_back(texcoord_indices[b]);
             object.triangle_texcoord_indices.push_back(texcoord_indices[c]);
+            object.triangle_colors.push_back(colors[a]);
+            object.triangle_colors.push_back(colors[b]);
+            object.triangle_colors.push_back(colors[c]);
         };
         const uint8_t primitive = *command & kGxOpcodeMask;
         switch (primitive) {
@@ -1126,7 +1222,16 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
                     return false;
                 }
                 if (!parse_display_list(archive, object)) {
-                    last_error_ = "unsupported or malformed GX display stream";
+                    last_error_ = "unsupported GX stream at PObj " +
+                        std::to_string(*primitive) + " descriptors";
+                    for (const HostVertexDescriptor& descriptor :
+                         object.vertex_descriptors) {
+                        last_error_ += " [a=" + std::to_string(descriptor.attribute) +
+                            " t=" + std::to_string(descriptor.attribute_type) +
+                            " c=" + std::to_string(descriptor.component_count) +
+                            " f=" + std::to_string(descriptor.component_type) +
+                            " s=" + std::to_string(descriptor.stride) + "]";
+                    }
                     return false;
                 }
                 std::string position_error;

@@ -292,9 +292,11 @@ void MeleeSceneRenderer::render()
     }
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
     GXSetNumChans(1);
     GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG,
                   GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
@@ -358,6 +360,10 @@ void MeleeSceneRenderer::render()
                 const uint32_t vertex = object.triangle_indices[index];
                 const auto& position = object.positions[vertex];
                 GXPosition3f32(position[0], position[1], position[2]);
+                const auto color = index < object.triangle_colors.size()
+                    ? object.triangle_colors[index]
+                    : std::array<uint8_t, 4>{ 255, 255, 255, 255 };
+                GXColor4u8(color[0], color[1], color[2], color[3]);
                 if (texture != nullptr && index < object.triangle_texcoord_indices.size()) {
                     const uint32_t texcoord = object.triangle_texcoord_indices[index];
                     if (texcoord != UINT32_MAX && texcoord < object.texcoords.size()) {

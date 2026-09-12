@@ -106,6 +106,8 @@ struct HostDrawObject {
     // UINT32_MAX denotes a primitive without an indexed normal attribute.
     std::vector<uint32_t> triangle_normal_indices;
     std::vector<uint32_t> triangle_texcoord_indices;
+    // Direct GX CLR0 values expanded to RGBA8 in triangle submission order.
+    std::vector<std::array<uint8_t, 4>> triangle_colors;
     std::vector<std::array<float, 3>> positions;
     std::vector<std::array<float, 3>> normals;
     std::vector<std::array<float, 2>> texcoords;

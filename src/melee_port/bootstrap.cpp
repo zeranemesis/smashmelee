@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -62,7 +63,10 @@ extern "C" int game_main(void)
     // but keep the standScene bootstrap usable if optional menu data is absent.
     meleeboard::hsd::HostScene menu_model;
     meleeboard::hsd::HostAnimation menu_animation;
+    meleeboard::hsd::HostScene menu_panel;
+    meleeboard::hsd::HostAnimation menu_panel_animation;
     bool menu_ready = false;
+    bool menu_panel_ready = false;
     std::vector<unsigned char> menu_bytes;
     if (meleeboard::disc::read_file("MnMaAll.dat", menu_bytes)) {
         meleeboard::hsd::Archive menu_archive;
@@ -81,6 +85,19 @@ extern "C" int game_main(void)
                 menu_animation.joints().size(), model_joints.value_or(0),
                 menu_model.draw_objects().size(),
                 menu_ready ? "model/camera decoded" : menu_model.last_error());
+            const auto panel_joints =
+                menu_archive.joint_tree_count("MenMainPanel_Top_joint");
+            menu_panel_ready = menu_panel_animation.load(
+                    menu_archive, "MenMainPanel_Top_animjoint") &&
+                menu_panel.load_joint(menu_archive, "MenMainPanel_Top_joint") &&
+                menu_panel.load_camera(menu_archive, "ScMenMain_cam_int1_camera") &&
+                panel_joints.has_value() &&
+                *panel_joints == menu_panel_animation.joints().size();
+            MeleeBootstrapLog.info(
+                "MnMaAll.dat main-menu panel: {} animation joints, {} model joints, {} draw objects ({})",
+                menu_panel_animation.joints().size(), panel_joints.value_or(0),
+                menu_panel.draw_objects().size(),
+                menu_panel_ready ? "panel decoded" : menu_panel.last_error());
         } else {
             MeleeBootstrapLog.warn(
                 "Could not materialize MnMaAll.dat's MenMainBack animation");
@@ -105,12 +122,21 @@ extern "C" int game_main(void)
         return 1;
     }
     meleeboard::hsd::HostAnimationPlayer menu_player;
+    meleeboard::hsd::HostAnimationPlayer menu_panel_player;
     if (menu_ready) {
         std::vector<uint32_t> mapping(menu_animation.joints().size());
         for (uint32_t index = 0; index < mapping.size(); ++index) {
             mapping[index] = index;
         }
         menu_ready = menu_player.attach(menu_animation, menu_model.joints(), mapping);
+    }
+    if (menu_panel_ready) {
+        std::vector<uint32_t> mapping(menu_panel_animation.joints().size());
+        for (uint32_t index = 0; index < mapping.size(); ++index) {
+            mapping[index] = index;
+        }
+        menu_panel_ready = menu_panel_player.attach(
+            menu_panel_animation, menu_panel.joints(), mapping);
     }
     MeleeBootstrapLog.info(
         "Mounted {}; materialized standScene with {} models, {} joints, {} draw objects, {} materials, and {} direct textures (M={:#x} C={:#x} L={:#x} F={:#x}); entering bootstrap loop",
@@ -121,6 +147,11 @@ extern "C" int game_main(void)
         stand_scene->fogs);
     meleeboard::hsd::HostScene& displayed_scene = menu_ready ? menu_model : host_scene;
     meleeboard::hsd::MeleeSceneRenderer scene_renderer(displayed_scene);
+    std::unique_ptr<meleeboard::hsd::MeleeSceneRenderer> panel_renderer;
+    if (menu_ready && menu_panel_ready) {
+        panel_renderer =
+            std::make_unique<meleeboard::hsd::MeleeSceneRenderer>(menu_panel);
+    }
     MeleeBootstrapLog.info(
         "{} renderer: {} drawable objects, {} skipped objects, {} triangles",
         menu_ready ? "MenMainBack" : "standScene",
@@ -169,6 +200,9 @@ extern "C" int game_main(void)
             if (menu_ready) {
                 menu_player.tick();
             }
+            if (menu_panel_ready) {
+                menu_panel_player.tick();
+            }
             simulation_accumulator -= kSimulationStep;
             ++steps;
         }
@@ -178,6 +212,9 @@ extern "C" int game_main(void)
             simulation_accumulator = std::chrono::duration<double>::zero();
         }
         scene_renderer.render();
+        if (panel_renderer != nullptr) {
+            panel_renderer->render();
+        }
         aurora_end_frame();
     }
 
