@@ -39,6 +39,8 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       and reference counters;
 - [x] port a deterministic GObj process scheduler with priority ordering and
       safe deferred removal;
+- [x] port the HSD singly-linked collection allocator and the 101-bucket ID
+      table used by scene/object dependency registration;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] mount a local GALE01 v1.02 ISO/RVZ, expose its GameCube FST, and materialize the `standScene` model/joint transforms from `GmRgStnd.dat` without unsafe host-pointer casts;

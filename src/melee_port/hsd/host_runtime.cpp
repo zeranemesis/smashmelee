@@ -3,6 +3,8 @@
 
 #include <melee/sysdolphin/baselib/class.h>
 #include <melee/sysdolphin/baselib/gobj.h>
+#include <melee/sysdolphin/baselib/id.h>
+#include <melee/sysdolphin/baselib/list.h>
 #include <melee/sysdolphin/baselib/object.h>
 #include <melee/sysdolphin/baselib/objalloc.h>
 
@@ -59,6 +61,32 @@ bool verify_gobj_scheduler()
     return ordered;
 }
 
+bool verify_core_collections()
+{
+    HSD_ListInitAllocData();
+    int first = 1;
+    int second = 2;
+    HSD_SList* list = HSD_SListAllocAndAppend(nullptr, &first);
+    list = HSD_SListAllocAndPrepend(list, &second);
+    const bool list_ready = list != nullptr && list->data == &second &&
+        list->next != nullptr && list->next->data == &first;
+    list = HSD_SListRemove(list);
+    list = HSD_SListRemove(list);
+
+    HSD_IDInitAllocData();
+    HSD_IDSetup();
+    HSD_IDInsertToTable(nullptr, 42, &first);
+    HSD_IDInsertToTable(nullptr, 143, &second); // Same hash bucket as 42.
+    int32_t found = 0;
+    const bool ids_ready = HSD_IDGetData(42, &found) == &first && found == 1 &&
+        HSD_IDGetData(143, &found) == &second && found == 1;
+    HSD_IDRemoveByIDFromTable(nullptr, 42);
+    const bool removal_works = HSD_IDGetData(42, &found) == nullptr &&
+        found == 0;
+    HSD_IDForgetMemory();
+    return list_ready && list == nullptr && ids_ready && removal_works;
+}
+
 } // namespace
 
 bool initialize_host_runtime()
@@ -109,7 +137,7 @@ bool initialize_host_runtime()
 
     if (!(aligned && initial_stats && free_list_reused && final_stats &&
           class_ready && references_work && class_stats &&
-          verify_gobj_scheduler())) {
+          verify_gobj_scheduler() && verify_core_collections())) {
         return false;
     }
 
