@@ -49,6 +49,9 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
 - [x] materialize the static HSD CObj camera (eye, interest, up vector,
       viewport, projection and depth planes), retaining a debug fallback for
       malformed or unsupported archives;
+- [x] apply static HSD CObj viewport and scissor state through Aurora GX,
+      including the render-mode scaling and field-jitter path used by
+      `HSD_CObjSetCurrent`;
 - import the upstream `Runtime`, `sysdolphin`, and required `melee/lb` headers/sources;
 - make pointer-width and endian assumptions explicit;
 - compile object/class allocation, GObj scheduling, VI, and GX initialization;

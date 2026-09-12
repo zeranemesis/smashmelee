@@ -26,7 +26,11 @@ struct HostJoint {
 struct HostCamera {
     uint16_t flags = 0;
     uint16_t projection_type = 0;
+    // HSD_RectS16 and Scissor are both stored as left/right/top/bottom in a
+    // CObjDesc.  Keep that ordering so the renderer can mirror
+    // HSD_CObjSetCurrent without retaining a GameCube address.
     std::array<int16_t, 4> viewport{};
+    std::array<uint16_t, 4> scissor{};
     std::array<float, 3> eye{};
     std::array<float, 3> interest{};
     std::array<float, 3> up{ 0.0F, 1.0F, 0.0F };

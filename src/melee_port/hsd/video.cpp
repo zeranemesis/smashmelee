@@ -54,4 +54,9 @@ uint64_t video_frame_count()
     return gRenderedFrames;
 }
 
+const GXRenderModeObj& logical_render_mode()
+{
+    return gRenderMode;
+}
+
 } // namespace meleeboard::hsd

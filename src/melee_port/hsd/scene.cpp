@@ -637,6 +637,15 @@ bool read_camera(const Archive& archive, uint32_t description, HostCamera& camer
             return false;
         }
     }
+    for (uint32_t index = 0; index < camera.scissor.size(); ++index) {
+        const auto high = archive.data_byte(description + 0x10 + index * 2);
+        const auto low = archive.data_byte(description + 0x11 + index * 2);
+        if (!high.has_value() || !low.has_value()) {
+            return false;
+        }
+        camera.scissor[index] =
+            static_cast<uint16_t>((static_cast<uint16_t>(*high) << 8) | *low);
+    }
     if (!read_transform(archive, *eye_description + 0x04, camera.eye) ||
         !read_transform(archive, *interest_description + 0x04,
                         camera.interest)) {

@@ -1,9 +1,11 @@
 #include "scene_renderer.hpp"
 
 #include "scene.hpp"
+#include "video.hpp"
 
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include <dolphin/vi.h>
 
 #include <algorithm>
 #include <array>
@@ -75,6 +77,50 @@ bool drawable(const HostDrawObject& object)
     }
     return std::all_of(object.triangle_indices.begin(), object.triangle_indices.end(),
                        [&object](uint32_t index) { return index < object.positions.size(); });
+}
+
+void apply_camera_viewport(const HostCamera& camera)
+{
+    // This is the normal-camera path in HSD_CObjSetCurrent: CObj coordinates
+    // live in VI pixels, while GX receives EFB/fb coordinates.  Keeping the
+    // conversion here makes split screens and menu sub-viewports independent
+    // of Aurora's physical window size.
+    const GXRenderModeObj& mode = logical_render_mode();
+    if (mode.viWidth == 0 || mode.viHeight == 0) {
+        return;
+    }
+    const float x_scale = static_cast<float>(mode.fbWidth) / mode.viWidth;
+    const float y_scale = static_cast<float>(mode.efbHeight) / mode.viHeight;
+    const float viewport_left = camera.viewport[0] * x_scale;
+    const float viewport_right = camera.viewport[1] * x_scale;
+    const float viewport_top = camera.viewport[2] * y_scale;
+    const float viewport_bottom = camera.viewport[3] * y_scale;
+    const float viewport_width = viewport_right - viewport_left;
+    const float viewport_height = viewport_bottom - viewport_top;
+    if (viewport_width > 0.0F && viewport_height > 0.0F) {
+        if (mode.field_rendering != 0) {
+            GXSetViewportJitter(viewport_left, viewport_top, viewport_width,
+                                viewport_height, 0.0F, 1.0F,
+                                VIGetNextField());
+        } else {
+            GXSetViewport(viewport_left, viewport_top, viewport_width,
+                          viewport_height, 0.0F, 1.0F);
+        }
+    }
+
+    const float scissor_left = camera.scissor[0] * x_scale;
+    const float scissor_right = camera.scissor[1] * x_scale;
+    const float scissor_top = camera.scissor[2] * y_scale;
+    const float scissor_bottom = camera.scissor[3] * y_scale;
+    const float scissor_width = scissor_right - scissor_left;
+    const float scissor_height = scissor_bottom - scissor_top;
+    if (scissor_left >= 0.0F && scissor_top >= 0.0F &&
+        scissor_width > 0.0F && scissor_height > 0.0F) {
+        GXSetScissor(static_cast<u32>(scissor_left),
+                     static_cast<u32>(scissor_top),
+                     static_cast<u32>(scissor_width),
+                     static_cast<u32>(scissor_height));
+    }
 }
 
 } // namespace
@@ -209,6 +255,9 @@ void MeleeSceneRenderer::render()
     }
 
     GXSetProjection(projection, projection_type);
+    if (!scene_.cameras().empty()) {
+        apply_camera_viewport(scene_.cameras().front());
+    }
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
