@@ -831,6 +831,24 @@ bool HostScene::load_joint(const Archive& archive, std::string_view symbol)
     return load_internal(archive, symbol, true);
 }
 
+bool HostScene::load_camera(const Archive& archive, std::string_view symbol)
+{
+    const auto description = archive.public_symbol_offset(symbol);
+    if (!description.has_value()) {
+        last_error_ = "could not resolve HSD camera symbol";
+        return false;
+    }
+    HostCamera camera{};
+    if (!read_camera(archive, *description, camera)) {
+        last_error_ = "could not decode HSD camera descriptor";
+        return false;
+    }
+    cameras_.clear();
+    cameras_.push_back(camera);
+    last_error_.clear();
+    return true;
+}
+
 bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
                               bool direct_joint)
 {

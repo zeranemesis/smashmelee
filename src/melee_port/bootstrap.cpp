@@ -72,13 +72,15 @@ extern "C" int game_main(void)
                 menu_archive.joint_tree_count("MenMainBack_Top_joint");
             const bool model_loaded =
                 menu_model.load_joint(menu_archive, "MenMainBack_Top_joint");
-            menu_ready = model_loaded && model_joints.has_value() &&
+            const bool camera_loaded = model_loaded && menu_model.load_camera(
+                menu_archive, "ScMenMain_cam_int1_camera");
+            menu_ready = model_loaded && camera_loaded && model_joints.has_value() &&
                 *model_joints == menu_animation.joints().size();
             MeleeBootstrapLog.info(
                 "Validated MnMaAll.dat main-menu data: {} animation joints, {} model joints, {} draw objects ({})",
                 menu_animation.joints().size(), model_joints.value_or(0),
                 menu_model.draw_objects().size(),
-                model_loaded ? "model decoded" : menu_model.last_error());
+                menu_ready ? "model/camera decoded" : menu_model.last_error());
         } else {
             MeleeBootstrapLog.warn(
                 "Could not materialize MnMaAll.dat's MenMainBack animation");

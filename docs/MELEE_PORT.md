@@ -61,6 +61,8 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
 - [x] decode and submit the original `MenMainBack` model through Aurora (86
       draw objects, 324 triangles) while advancing its joint animation at 60
       Hz, retaining `standScene` as the safe fallback;
+- [x] resolve and apply the separately exported main-menu camera
+      `ScMenMain_cam_int1_camera` from `MnMaAll.dat`;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] advance the host HSD/GObj simulation on a bounded fixed 60 Hz clock,

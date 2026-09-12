@@ -120,6 +120,7 @@ class HostScene {
 public:
     bool load(const Archive& archive, std::string_view symbol);
     bool load_joint(const Archive& archive, std::string_view symbol);
+    bool load_camera(const Archive& archive, std::string_view symbol);
 
     std::vector<HostJoint>& joints();
     const std::vector<HostJoint>& joints() const;
