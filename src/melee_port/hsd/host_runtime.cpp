@@ -3,6 +3,7 @@
 
 #include <melee/sysdolphin/baselib/class.h>
 #include <melee/sysdolphin/baselib/gobj.h>
+#include <melee/sysdolphin/baselib/fobj.h>
 #include <melee/sysdolphin/baselib/id.h>
 #include <melee/sysdolphin/baselib/list.h>
 #include <melee/sysdolphin/baselib/mtx.h>
@@ -103,6 +104,26 @@ bool verify_math_allocators()
         HSD_ObjAllocGetUsing(HSD_MtxGetAllocData()) == 0;
 }
 
+bool verify_fobj_runtime()
+{
+    HSD_FObjInitAllocData();
+    HSD_FObj* first = HSD_FObjAlloc();
+    HSD_FObj* second = HSD_FObjAlloc();
+    if (first == nullptr || second == nullptr) {
+        HSD_FObjRemove(first);
+        HSD_FObjRemove(second);
+        return false;
+    }
+    first->next = second;
+    first->startframe = 12;
+    first->ad_head = reinterpret_cast<uint8_t*>(first);
+    HSD_FObjReqAnimAll(first, 3.0F);
+    const bool requested = first->time == 15.0F &&
+        HSD_FObjGetState(first) == 1 && HSD_FObjGetState(second) == 1;
+    HSD_FObjRemoveAll(first);
+    return requested && HSD_ObjAllocGetUsing(HSD_FObjGetAllocData()) == 0;
+}
+
 } // namespace
 
 bool initialize_host_runtime()
@@ -154,7 +175,7 @@ bool initialize_host_runtime()
     if (!(aligned && initial_stats && free_list_reused && final_stats &&
           class_ready && references_work && class_stats &&
           verify_gobj_scheduler() && verify_core_collections() &&
-          verify_math_allocators())) {
+          verify_math_allocators() && verify_fobj_runtime())) {
         return false;
     }
 

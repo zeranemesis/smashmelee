@@ -43,6 +43,8 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       table used by scene/object dependency registration;
 - [x] port the HSD host vector and matrix allocation pools used by camera,
       joint, and animation runtime objects;
+- [x] port FObj allocation, descriptor materialization, lifecycle, and request
+      state so host animation objects have the upstream-compatible foundation;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] advance the host HSD/GObj simulation on a bounded fixed 60 Hz clock,

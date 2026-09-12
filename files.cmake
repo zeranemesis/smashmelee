@@ -83,6 +83,7 @@ set(PORT_FILES
         src/melee_port/hsd/archive.cpp
         src/melee_port/hsd/class.cpp
         src/melee_port/hsd/gobj.cpp
+        src/melee_port/hsd/fobj.cpp
         src/melee_port/hsd/host_runtime.cpp
         src/melee_port/hsd/id.cpp
         src/melee_port/hsd/list.cpp
