@@ -58,6 +58,9 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
 - [x] validate the upstream main-menu pair from `MnMaAll.dat` on GALE01 v1.02:
       `MenMainBack_Top_animjoint` and `MenMainBack_Top_joint` both contain 102
       corresponding hierarchy nodes;
+- [x] decode and submit the original `MenMainBack` model through Aurora (86
+      draw objects, 324 triangles) while advancing its joint animation at 60
+      Hz, retaining `standScene` as the safe fallback;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] advance the host HSD/GObj simulation on a bounded fixed 60 Hz clock,

@@ -2,6 +2,7 @@
 
 #include "hsd/host_runtime.hpp"
 #include "hsd/animation.hpp"
+#include "hsd/animation_player.hpp"
 #include "hsd/scene.hpp"
 #include "hsd/scene_renderer.hpp"
 
@@ -59,17 +60,25 @@ extern "C" int game_main(void)
     // The reference main-menu flow loads this exact archive/symbol pair in
     // mnmain.c. Validate the native animation path against the user's disc,
     // but keep the standScene bootstrap usable if optional menu data is absent.
+    meleeboard::hsd::HostScene menu_model;
+    meleeboard::hsd::HostAnimation menu_animation;
+    bool menu_ready = false;
     std::vector<unsigned char> menu_bytes;
     if (meleeboard::disc::read_file("MnMaAll.dat", menu_bytes)) {
         meleeboard::hsd::Archive menu_archive;
-        meleeboard::hsd::HostAnimation menu_animation;
         if (menu_archive.parse(std::move(menu_bytes)) &&
             menu_animation.load(menu_archive, "MenMainBack_Top_animjoint")) {
             const auto model_joints =
                 menu_archive.joint_tree_count("MenMainBack_Top_joint");
+            const bool model_loaded =
+                menu_model.load_joint(menu_archive, "MenMainBack_Top_joint");
+            menu_ready = model_loaded && model_joints.has_value() &&
+                *model_joints == menu_animation.joints().size();
             MeleeBootstrapLog.info(
-                "Validated MnMaAll.dat main-menu animation: {} animation joints, {} model joints",
-                menu_animation.joints().size(), model_joints.value_or(0));
+                "Validated MnMaAll.dat main-menu data: {} animation joints, {} model joints, {} draw objects ({})",
+                menu_animation.joints().size(), model_joints.value_or(0),
+                menu_model.draw_objects().size(),
+                model_loaded ? "model decoded" : menu_model.last_error());
         } else {
             MeleeBootstrapLog.warn(
                 "Could not materialize MnMaAll.dat's MenMainBack animation");
@@ -93,6 +102,14 @@ extern "C" int game_main(void)
         meleeboard::disc::unmount();
         return 1;
     }
+    meleeboard::hsd::HostAnimationPlayer menu_player;
+    if (menu_ready) {
+        std::vector<uint32_t> mapping(menu_animation.joints().size());
+        for (uint32_t index = 0; index < mapping.size(); ++index) {
+            mapping[index] = index;
+        }
+        menu_ready = menu_player.attach(menu_animation, menu_model.joints(), mapping);
+    }
     MeleeBootstrapLog.info(
         "Mounted {}; materialized standScene with {} models, {} joints, {} draw objects, {} materials, and {} direct textures (M={:#x} C={:#x} L={:#x} F={:#x}); entering bootstrap loop",
         meleeboard::disc::mounted_path(), host_scene.model_roots().size(),
@@ -100,9 +117,11 @@ extern "C" int game_main(void)
         host_scene.materials().size(), host_scene.textures().size(),
         stand_scene->models, stand_scene->cameras, stand_scene->lights,
         stand_scene->fogs);
-    meleeboard::hsd::MeleeSceneRenderer scene_renderer(host_scene);
+    meleeboard::hsd::HostScene& displayed_scene = menu_ready ? menu_model : host_scene;
+    meleeboard::hsd::MeleeSceneRenderer scene_renderer(displayed_scene);
     MeleeBootstrapLog.info(
-        "standScene renderer: {} drawable objects, {} skipped objects, {} triangles",
+        "{} renderer: {} drawable objects, {} skipped objects, {} triangles",
+        menu_ready ? "MenMainBack" : "standScene",
         scene_renderer.drawable_object_count(), scene_renderer.skipped_object_count(),
         scene_renderer.submitted_triangle_count());
 
@@ -145,6 +164,9 @@ extern "C" int game_main(void)
         while (simulation_accumulator >= kSimulationStep &&
                steps < kMaxCatchUpSteps) {
             meleeboard::hsd::tick_host_runtime();
+            if (menu_ready) {
+                menu_player.tick();
+            }
             simulation_accumulator -= kSimulationStep;
             ++steps;
         }

@@ -823,6 +823,17 @@ bool read_texture(const Archive& archive, uint32_t texture_description,
 
 bool HostScene::load(const Archive& archive, std::string_view symbol)
 {
+    return load_internal(archive, symbol, false);
+}
+
+bool HostScene::load_joint(const Archive& archive, std::string_view symbol)
+{
+    return load_internal(archive, symbol, true);
+}
+
+bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
+                              bool direct_joint)
+{
     joints_.clear();
     cameras_.clear();
     materials_.clear();
@@ -831,16 +842,21 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
     model_roots_.clear();
     last_error_ = "could not resolve HSD scene roots";
 
-    const auto scene = archive.scene_roots(symbol);
-    const auto model_count = archive.scene_model_count(symbol);
-    if (!scene.has_value() || !model_count.has_value()) {
-        return false;
-    }
+    if (direct_joint) {
+        const auto root = archive.public_symbol_offset(symbol);
+        if (!root.has_value()) {
+            return false;
+        }
+        model_roots_.push_back(*root);
+    } else {
+        const auto scene = archive.scene_roots(symbol);
+        const auto model_count = archive.scene_model_count(symbol);
+        if (!scene.has_value() || !model_count.has_value()) {
+            return false;
+        }
 
-    // SceneCameraDesc is { HSD_CObjDesc* desc, HSD_CameraAnim** anims } and
-    // is terminated by a null desc.  Camera animation remains a later HSD
-    // milestone; this copies the static camera used by standScene.
-    if (scene->cameras != 0) {
+        // SceneCameraDesc is { HSD_CObjDesc* desc, HSD_CameraAnim** anims }.
+        if (scene->cameras != 0) {
         for (uint32_t index = 0; index < kMaxSceneCameras; ++index) {
             const uint32_t entry = scene->cameras + index * 8;
             const auto camera_description = archive.data_pointer(entry);
@@ -859,24 +875,25 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
             }
             cameras_.push_back(camera);
         }
+        }
+        for (uint32_t index = 0; index < *model_count; ++index) {
+            const auto model = archive.data_pointer(scene->models +
+                                                 index * sizeof(uint32_t));
+            if (!model.has_value()) {
+                return false;
+            }
+            const auto root = archive.data_pointer(*model);
+            if (!root.has_value()) {
+                return false;
+            }
+            model_roots_.push_back(*root);
+        }
     }
 
     last_error_ = "could not build HSD joint hierarchy";
     std::vector<uint32_t> pending;
-    for (uint32_t index = 0; index < *model_count; ++index) {
-        const auto model = archive.data_pointer(scene->models +
-                                             index * sizeof(uint32_t));
-        if (!model.has_value()) {
-            return false;
-        }
-        const auto root = archive.data_pointer(*model);
-        if (!root.has_value()) {
-            return false;
-        }
-        model_roots_.push_back(*root);
-        if (*root != 0) {
-            pending.push_back(*root);
-        }
+    for (uint32_t root : model_roots_) {
+        if (root != 0) pending.push_back(root);
     }
 
     std::unordered_map<uint32_t, uint32_t> joint_indices;
