@@ -51,6 +51,19 @@ struct HostVertexDescriptor {
     uint8_t fraction = 0;
 };
 
+// Host copy of the fixed-size HSD_Material payload referenced by an
+// HSD_MObjDesc.  Texture/TEV state remains separate because its source is a
+// TObj chain, but this data is sufficient for the untextured material path.
+struct HostMaterial {
+    uint32_t source_offset = 0;
+    uint32_t render_mode = 0;
+    std::array<uint8_t, 4> ambient{};
+    std::array<uint8_t, 4> diffuse{};
+    std::array<uint8_t, 4> specular{};
+    float alpha = 1.0F;
+    float shininess = 0.0F;
+};
+
 struct HostDrawObject {
     uint32_t source_offset = 0;
     uint32_t material_description = 0;
@@ -58,6 +71,7 @@ struct HostDrawObject {
     uint32_t render_mode = 0;
     uint32_t texture_description = 0;
     uint32_t material = 0;
+    int32_t material_index = -1;
     uint32_t vertex_description = 0;
     uint32_t display_list = 0;
     uint16_t primitive_flags = 0;
@@ -90,6 +104,7 @@ public:
 
     const std::vector<HostJoint>& joints() const;
     const std::vector<HostCamera>& cameras() const;
+    const std::vector<HostMaterial>& materials() const;
     const std::vector<HostDrawObject>& draw_objects() const;
     const std::vector<uint32_t>& model_roots() const;
     const std::string& last_error() const;
@@ -97,6 +112,7 @@ public:
 private:
     std::vector<HostJoint> joints_;
     std::vector<HostCamera> cameras_;
+    std::vector<HostMaterial> materials_;
     std::vector<HostDrawObject> draw_objects_;
     std::vector<uint32_t> model_roots_;
     std::string last_error_;

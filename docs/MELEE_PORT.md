@@ -52,6 +52,8 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
 - [x] apply static HSD CObj viewport and scissor state through Aurora GX,
       including the render-mode scaling and field-jitter path used by
       `HSD_CObjSetCurrent`;
+- [x] materialize host-safe `HSD_Material` records and apply their diffuse
+      color and alpha to supported untextured draw objects;
 - import the upstream `Runtime`, `sysdolphin`, and required `melee/lb` headers/sources;
 - make pointer-width and endian assumptions explicit;
 - compile object/class allocation, GObj scheduling, VI, and GX initialization;

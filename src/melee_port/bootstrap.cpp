@@ -63,9 +63,10 @@ extern "C" int game_main(void)
         return 1;
     }
     MeleeBootstrapLog.info(
-        "Mounted {}; materialized standScene with {} models, {} joints, and {} draw objects (M={:#x} C={:#x} L={:#x} F={:#x}); entering bootstrap loop",
+        "Mounted {}; materialized standScene with {} models, {} joints, {} draw objects, and {} materials (M={:#x} C={:#x} L={:#x} F={:#x}); entering bootstrap loop",
         meleeboard::disc::mounted_path(), host_scene.model_roots().size(),
         host_scene.joints().size(), host_scene.draw_objects().size(),
+        host_scene.materials().size(),
         stand_scene->models, stand_scene->cameras, stand_scene->lights,
         stand_scene->fogs);
     meleeboard::hsd::MeleeSceneRenderer scene_renderer(host_scene);

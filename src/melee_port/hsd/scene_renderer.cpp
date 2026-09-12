@@ -79,6 +79,20 @@ bool drawable(const HostDrawObject& object)
                        [&object](uint32_t index) { return index < object.positions.size(); });
 }
 
+GXColor material_color(const HostScene& scene, const HostDrawObject& object)
+{
+    constexpr GXColor fallback = { 72, 220, 180, 255 };
+    if (object.material_index < 0 ||
+        static_cast<size_t>(object.material_index) >= scene.materials().size()) {
+        return fallback;
+    }
+    const HostMaterial& material =
+        scene.materials()[static_cast<size_t>(object.material_index)];
+    const float alpha = std::clamp(material.alpha, 0.0F, 1.0F);
+    return { material.diffuse[0], material.diffuse[1], material.diffuse[2],
+             static_cast<uint8_t>(std::lround(alpha * 255.0F)) };
+}
+
 void apply_camera_viewport(const HostCamera& camera)
 {
     // This is the normal-camera path in HSD_CObjSetCurrent: CObj coordinates
@@ -264,7 +278,6 @@ void MeleeSceneRenderer::render()
     GXSetNumChans(1);
     GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG,
                   GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
-    GXSetChanMatColor(GX_COLOR0A0, { 72, 220, 180, 255 });
     GXSetNumTexGens(0);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
@@ -281,6 +294,7 @@ void MeleeSceneRenderer::render()
             view_matrix, worlds[static_cast<size_t>(object_owner[object_index])]);
         GXLoadPosMtxImm(model_view.data(), GX_PNMTX0);
         GXSetCurrentMtx(GX_PNMTX0);
+        GXSetChanMatColor(GX_COLOR0A0, material_color(scene_, object));
         for (size_t start = 0; start < object.triangle_indices.size();) {
             const size_t remaining = object.triangle_indices.size() - start;
             const size_t count = std::min<size_t>(remaining, 65535 / 3 * 3);

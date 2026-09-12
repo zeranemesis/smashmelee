@@ -671,12 +671,46 @@ bool read_camera(const Archive& archive, uint32_t description, HostCamera& camer
     return true;
 }
 
+bool read_material(const Archive& archive, uint32_t description,
+                   uint32_t material_offset, HostMaterial& material)
+{
+    // HSD_MObjDesc is { class, rendermode, texdesc, mat, renderdesc, pedesc }.
+    // HSD_Material is three GXColor values followed by alpha and shininess.
+    const auto render_mode = archive.data_word(description + 0x04);
+    const auto alpha = archive.data_float(material_offset + 0x0C);
+    const auto shininess = archive.data_float(material_offset + 0x10);
+    if (!render_mode.has_value() || !alpha.has_value() ||
+        !shininess.has_value() || !std::isfinite(*alpha) ||
+        !std::isfinite(*shininess)) {
+        return false;
+    }
+    material.source_offset = material_offset;
+    material.render_mode = *render_mode;
+    material.alpha = *alpha;
+    material.shininess = *shininess;
+    std::array<std::array<uint8_t, 4>*, 3> colors = {
+        &material.ambient, &material.diffuse, &material.specular,
+    };
+    for (uint32_t color = 0; color < colors.size(); ++color) {
+        for (uint32_t component = 0; component < (*colors[color]).size();
+             ++component) {
+            const auto value = archive.data_byte(material_offset + color * 4 + component);
+            if (!value.has_value()) {
+                return false;
+            }
+            (*colors[color])[component] = *value;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 bool HostScene::load(const Archive& archive, std::string_view symbol)
 {
     joints_.clear();
     cameras_.clear();
+    materials_.clear();
     draw_objects_.clear();
     model_roots_.clear();
     last_error_ = "could not resolve HSD scene roots";
@@ -790,6 +824,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
     }
 
     last_error_ = "could not decode HSD draw objects";
+    std::unordered_map<uint32_t, int32_t> material_indices;
     for (HostJoint& joint : joints_) {
         const auto first = archive.data_pointer(joint.source_offset + 0x10);
         if (!first.has_value()) {
@@ -830,6 +865,22 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                 object.render_mode = *render_mode;
                 object.texture_description = *texture_description;
                 object.material = *material_data;
+                if (*material_data != 0) {
+                    const auto existing = material_indices.find(*material_data);
+                    if (existing != material_indices.end()) {
+                        object.material_index = existing->second;
+                    } else {
+                        HostMaterial host_material{};
+                        if (read_material(archive, *material, *material_data,
+                                          host_material)) {
+                            object.material_index =
+                                static_cast<int32_t>(materials_.size());
+                            material_indices.emplace(*material_data,
+                                                     object.material_index);
+                            materials_.push_back(host_material);
+                        }
+                    }
+                }
             }
 
             if (*primitive != 0) {
@@ -976,6 +1027,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                 chained.render_mode = object.render_mode;
                 chained.texture_description = object.texture_description;
                 chained.material = object.material;
+                chained.material_index = object.material_index;
                 std::string primitive_error;
                 if (!materialize_primitive(archive, primitive_link, chained, primitive_error)) {
                     last_error_ = primitive_error;
@@ -1019,6 +1071,11 @@ const std::vector<HostJoint>& HostScene::joints() const
 const std::vector<HostCamera>& HostScene::cameras() const
 {
     return cameras_;
+}
+
+const std::vector<HostMaterial>& HostScene::materials() const
+{
+    return materials_;
 }
 
 const std::vector<HostDrawObject>& HostScene::draw_objects() const
