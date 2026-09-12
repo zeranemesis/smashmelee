@@ -16,6 +16,8 @@
 #include <port/main.h>
 #include <port/settings.h>
 
+#include <algorithm>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -75,6 +77,17 @@ extern "C" int game_main(void)
         scene_renderer.drawable_object_count(), scene_renderer.skipped_object_count(),
         scene_renderer.submitted_triangle_count());
 
+    // Melee's HSD/GObj scene work advances on the NTSC 60 Hz cadence, while
+    // Aurora may present faster or slower depending on the host display.
+    // Bound catch-up after a debugger pause so an overloaded machine does not
+    // spend an unbounded frame simulating stale input.
+    using Clock = std::chrono::steady_clock;
+    constexpr std::chrono::duration<double> kSimulationStep{ 1.0 / 60.0 };
+    constexpr auto kMaxElapsed = std::chrono::milliseconds(250);
+    constexpr uint32_t kMaxCatchUpSteps = 4;
+    auto previous_tick = Clock::now();
+    std::chrono::duration<double> simulation_accumulator = kSimulationStep;
+
     while (PartyBoard_IsRunning) {
         const AuroraEvent* event = aurora_update();
         while (event != nullptr && event->type != AURORA_NONE) {
@@ -94,7 +107,23 @@ extern "C" int game_main(void)
         if (!aurora_begin_frame()) {
             continue;
         }
-        meleeboard::hsd::tick_host_runtime();
+        const auto now = Clock::now();
+        simulation_accumulator += std::min(
+            now - previous_tick,
+            std::chrono::duration_cast<Clock::duration>(kMaxElapsed));
+        previous_tick = now;
+        uint32_t steps = 0;
+        while (simulation_accumulator >= kSimulationStep &&
+               steps < kMaxCatchUpSteps) {
+            meleeboard::hsd::tick_host_runtime();
+            simulation_accumulator -= kSimulationStep;
+            ++steps;
+        }
+        if (steps == kMaxCatchUpSteps && simulation_accumulator >= kSimulationStep) {
+            // Drop stale time rather than running a simulation catch-up loop
+            // disconnected from current controller state.
+            simulation_accumulator = std::chrono::duration<double>::zero();
+        }
         scene_renderer.render();
         aurora_end_frame();
     }

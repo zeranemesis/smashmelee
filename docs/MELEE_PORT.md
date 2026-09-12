@@ -45,6 +45,8 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       joint, and animation runtime objects;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
+- [x] advance the host HSD/GObj simulation on a bounded fixed 60 Hz clock,
+      independent of Aurora's presentation cadence;
 - [x] mount a local GALE01 v1.02 ISO/RVZ, expose its GameCube FST, and materialize the `standScene` model/joint transforms from `GmRgStnd.dat` without unsafe host-pointer casts;
 - [x] preserve and validate HSD relocation records, including valid relocated
       zero offsets, instead of treating GameCube pointers as host pointers;
