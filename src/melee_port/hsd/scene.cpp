@@ -184,10 +184,6 @@ bool read_position(const Archive& archive,
         error = "position descriptor has a non-position attribute";
         return false;
     }
-    if (descriptor.vertex_data == 0) {
-        error = "position descriptor has no vertex array";
-        return false;
-    }
     if (descriptor.component_count > 1) {
         error = "position descriptor has an unknown component count";
         return false;
@@ -308,6 +304,64 @@ bool materialize_positions(const Archive& archive, HostDrawObject& object,
     return true;
 }
 
+bool materialize_primitive(const Archive& archive, uint32_t primitive,
+                           HostDrawObject& object, std::string& error)
+{
+    const auto vertex_description = archive.data_pointer(primitive + 0x08);
+    const auto flags_and_display_count = archive.data_word(primitive + 0x0C);
+    const auto display_list = archive.data_pointer(primitive + 0x10);
+    if (!vertex_description.has_value() || !flags_and_display_count.has_value() ||
+        !display_list.has_value()) {
+        error = "truncated HSD PObjDesc";
+        return false;
+    }
+    object.primitive_description = primitive;
+    object.vertex_description = *vertex_description;
+    object.primitive_flags = static_cast<uint16_t>(*flags_and_display_count >> 16);
+    object.display_list_count = static_cast<uint16_t>(*flags_and_display_count);
+    object.display_list = *display_list;
+    const uint32_t display_bytes = static_cast<uint32_t>(object.display_list_count) << 5;
+    if (!archive.contains_data_range(object.display_list, display_bytes)) {
+        error = "invalid HSD PObj display list";
+        return false;
+    }
+    bool terminated = object.vertex_description == 0;
+    for (uint32_t index = 0; object.vertex_description != 0 &&
+         index < kMaxVertexDescriptors; ++index) {
+        const uint32_t descriptor = object.vertex_description + index * kVertexDescriptorSize;
+        const auto attribute = archive.data_word(descriptor);
+        if (!attribute.has_value()) { error = "truncated HSD vertex descriptor"; return false; }
+        if (*attribute == kGxVertexAttributeNull) { terminated = true; break; }
+        const auto type = archive.data_word(descriptor + 0x04);
+        const auto count = archive.data_word(descriptor + 0x08);
+        const auto component = archive.data_word(descriptor + 0x0C);
+        const auto fraction_stride = archive.data_word(descriptor + 0x10);
+        const auto vertex_data = archive.data_pointer(descriptor + 0x14);
+        if (!type || !count || !component || !fraction_stride || !vertex_data) {
+            error = "truncated HSD vertex descriptor fields"; return false;
+        }
+        object.vertex_descriptors.push_back({
+            .attribute = *attribute, .attribute_type = *type, .component_count = *count,
+            .component_type = *component, .vertex_data = *vertex_data,
+            .stride = static_cast<uint16_t>(*fraction_stride),
+            .fraction = static_cast<uint8_t>(*fraction_stride >> 24),
+        });
+    }
+    if (!terminated || !parse_display_list(archive, object)) {
+        error = "unsupported or malformed GX display stream";
+        return false;
+    }
+    std::string position_error;
+    if (materialize_positions(archive, object, position_error)) {
+        object.position_stream_decoded = true;
+    } else {
+        object.position_decode_error = std::move(position_error);
+        object.positions.clear();
+        object.triangle_indices.clear();
+    }
+    return true;
+}
+
 bool read_transform(const Archive& archive, uint32_t offset,
                     std::array<float, 3>& destination)
 {
@@ -339,12 +393,12 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
     last_error_ = "could not build HSD joint hierarchy";
     std::vector<uint32_t> pending;
     for (uint32_t index = 0; index < *model_count; ++index) {
-        const auto model = archive.data_word(scene->models +
+        const auto model = archive.data_pointer(scene->models +
                                              index * sizeof(uint32_t));
         if (!model.has_value()) {
             return false;
         }
-        const auto root = archive.data_word(*model);
+        const auto root = archive.data_pointer(*model);
         if (!root.has_value()) {
             return false;
         }
@@ -366,8 +420,8 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
         }
 
         const auto flags = archive.data_word(offset + 0x04);
-        const auto child = archive.data_word(offset + 0x08);
-        const auto sibling = archive.data_word(offset + 0x0C);
+        const auto child = archive.data_pointer(offset + 0x08);
+        const auto sibling = archive.data_pointer(offset + 0x0C);
         if (!flags.has_value() || !child.has_value() || !sibling.has_value()) {
             return false;
         }
@@ -393,8 +447,8 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
 
     last_error_ = "could not link HSD joint hierarchy";
     for (HostJoint& joint : joints_) {
-        const auto child = archive.data_word(joint.source_offset + 0x08);
-        const auto sibling = archive.data_word(joint.source_offset + 0x0C);
+        const auto child = archive.data_pointer(joint.source_offset + 0x08);
+        const auto sibling = archive.data_pointer(joint.source_offset + 0x0C);
         if (!child.has_value() || !sibling.has_value()) {
             return false;
         }
@@ -416,7 +470,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
 
     last_error_ = "could not decode HSD draw objects";
     for (HostJoint& joint : joints_) {
-        const auto first = archive.data_word(joint.source_offset + 0x10);
+        const auto first = archive.data_pointer(joint.source_offset + 0x10);
         if (!first.has_value()) {
             return false;
         }
@@ -429,9 +483,9 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                 draw_objects_.size() >= kMaxSceneDrawObjects) {
                 return false;
             }
-            const auto next = archive.data_word(description + 0x04);
-            const auto material = archive.data_word(description + 0x08);
-            const auto primitive = archive.data_word(description + 0x0C);
+            const auto next = archive.data_pointer(description + 0x04);
+            const auto material = archive.data_pointer(description + 0x08);
+            const auto primitive = archive.data_pointer(description + 0x0C);
             if (!next.has_value() || !material.has_value() ||
                 !primitive.has_value()) {
                 return false;
@@ -445,8 +499,8 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
             if (*material != 0) {
                 const auto render_mode = archive.data_word(*material + 0x04);
                 const auto texture_description =
-                    archive.data_word(*material + 0x08);
-                const auto material_data = archive.data_word(*material + 0x0C);
+                    archive.data_pointer(*material + 0x08);
+                const auto material_data = archive.data_pointer(*material + 0x0C);
                 if (!render_mode.has_value() ||
                     !texture_description.has_value() ||
                     !material_data.has_value()) {
@@ -477,8 +531,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
 
                 const uint32_t display_bytes =
                     static_cast<uint32_t>(object.display_list_count) << 5;
-                if ((display_bytes != 0 && object.display_list == 0) ||
-                    !archive.contains_data_range(object.display_list,
+                if (!archive.contains_data_range(object.display_list,
                                                  display_bytes)) {
                     return false;
                 }
@@ -506,7 +559,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                     const auto fraction_and_stride =
                         archive.data_word(descriptor + 0x10);
                     const auto vertex_data =
-                        archive.data_word(descriptor + 0x14);
+                        archive.data_pointer(descriptor + 0x14);
                     if (!attribute_type.has_value() ||
                         !component_count.has_value() ||
                         !component_type.has_value() ||
@@ -520,11 +573,11 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                         .component_count = *component_count,
                         .component_type = *component_type,
                         .vertex_data = *vertex_data,
-                        // HSD stores these as u8 fraction, u8 stride, u16
-                        // padding.  Archive::data_word returns the big-endian
-                        // value, so stride is bits 16..23, not the low word.
-                        .stride = static_cast<uint16_t>(
-                            (*fraction_and_stride >> 16) & 0xFF),
+                        // HSD_VtxDescList has a u8 fraction followed by the
+                        // compiler's alignment padding and a big-endian u16
+                        // stride.  The stride is consequently the low word
+                        // returned by Archive::data_word.
+                        .stride = static_cast<uint16_t>(*fraction_and_stride),
                         .fraction = static_cast<uint8_t>(
                             *fraction_and_stride >> 24),
                     });
@@ -540,6 +593,7 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                 if (materialize_positions(archive, object, position_error)) {
                     object.position_stream_decoded = true;
                 } else {
+                    object.position_decode_error = std::move(position_error);
                     // An individual legacy vertex layout must not prevent the
                     // rest of a scene from loading.  The host renderer can
                     // skip this object until its layout is implemented.
@@ -557,6 +611,48 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                     object_index;
             }
             previous_draw_object = object_index;
+
+            // A DObj points at the head of an HSD_PObjDesc chain.  The
+            // original runtime loads every PObj in that chain; keeping only
+            // the head silently discards geometry when it is stored in a
+            // later PObj (as happens in standScene).
+            uint32_t primitive_link = *primitive;
+            std::unordered_set<uint32_t> primitive_chain;
+            while (primitive_link != 0) {
+                if (!primitive_chain.insert(primitive_link).second) {
+                    last_error_ = "cyclic HSD PObjDesc chain";
+                    return false;
+                }
+                const auto primitive_next = archive.data_pointer(primitive_link + 0x04);
+                if (!primitive_next.has_value()) {
+                    last_error_ = "truncated HSD PObjDesc chain";
+                    return false;
+                }
+                primitive_link = *primitive_next;
+                if (primitive_link == 0) {
+                    break;
+                }
+                if (draw_objects_.size() >= kMaxSceneDrawObjects) {
+                    last_error_ = "too many HSD PObjDesc entries";
+                    return false;
+                }
+                HostDrawObject chained{};
+                chained.source_offset = primitive_link;
+                chained.material_description = *material;
+                chained.primitive_description = primitive_link;
+                chained.render_mode = object.render_mode;
+                chained.texture_description = object.texture_description;
+                chained.material = object.material;
+                std::string primitive_error;
+                if (!materialize_primitive(archive, primitive_link, chained, primitive_error)) {
+                    last_error_ = primitive_error;
+                    return false;
+                }
+                const int32_t chained_index = static_cast<int32_t>(draw_objects_.size());
+                draw_objects_.push_back(std::move(chained));
+                draw_objects_[static_cast<size_t>(previous_draw_object)].next = chained_index;
+                previous_draw_object = chained_index;
+            }
             description = *next;
         }
     }

@@ -42,6 +42,10 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] mount a local GALE01 v1.02 ISO/RVZ, expose its GameCube FST, and materialize the `standScene` model/joint transforms from `GmRgStnd.dat` without unsafe host-pointer casts;
+- [x] preserve and validate HSD relocation records, including valid relocated
+      zero offsets, instead of treating GameCube pointers as host pointers;
+- [x] decode indexed position streams and render the supported `standScene`
+      mesh hierarchy through Aurora GX with a temporary debug material;
 - import the upstream `Runtime`, `sysdolphin`, and required `melee/lb` headers/sources;
 - make pointer-width and endian assumptions explicit;
 - compile object/class allocation, GObj scheduling, VI, and GX initialization;

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace meleeboard::hsd {
@@ -34,6 +35,13 @@ public:
     bool contains_data_range(uint32_t data_offset, uint32_t byte_count) const;
     std::optional<uint8_t> data_byte(uint32_t data_offset) const;
     std::optional<uint32_t> data_word(uint32_t data_offset) const;
+    // Reads an on-disc pointer field as an offset in the HSD data section.
+    // A zero offset is valid when the field is listed in the relocation table:
+    // the original HSD loader adds the data-section base to every relocation
+    // field, including one whose stored value is zero.  A zero word outside
+    // the relocation table is a null pointer.  Non-null unrelocated values
+    // are not safe host data pointers and are rejected.
+    std::optional<uint32_t> data_pointer(uint32_t field_offset) const;
     std::optional<float> data_float(uint32_t data_offset) const;
     std::optional<SceneRoots> scene_roots(std::string_view symbol) const;
     std::optional<uint32_t> scene_model_count(std::string_view symbol) const;
@@ -44,6 +52,7 @@ private:
     uint32_t data_size_ = 0;
     size_t public_table_offset_ = 0;
     size_t symbols_offset_ = 0;
+    std::unordered_set<uint32_t> relocation_fields_;
     std::vector<unsigned char> bytes_;
 };
 

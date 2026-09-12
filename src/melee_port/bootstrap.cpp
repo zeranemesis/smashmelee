@@ -2,53 +2,26 @@
 
 #include "hsd/host_runtime.hpp"
 #include "hsd/scene.hpp"
+#include "hsd/scene_renderer.hpp"
 
 #include <melee/port/disc_mount.hpp>
 #include <melee/sysdolphin/baselib/archive.hpp>
 
-#include "../port/ui/document.hpp"
 #include "../port/ui/ui.hpp"
 
 #include <aurora/aurora.h>
 #include <aurora/event.h>
 #include <aurora/lib/logging.hpp>
+#include <dolphin/vi.h>
 #include <port/main.h>
 #include <port/settings.h>
 
-#include <memory>
 #include <string>
 #include <vector>
 
 namespace {
 
 aurora::Module MeleeBootstrapLog("meleeboard::bootstrap");
-
-const Rml::String kBootstrapDocument = R"RML(
-<rml>
-<head>
-    <link type="text/rcss" href="res/rml/melee_bootstrap.rcss" />
-</head>
-<body>
-    <div class="backdrop" />
-    <main>
-        <div class="eyebrow">NATIVE PC PORT</div>
-        <h1>MELEE BOARD</h1>
-        <div class="rule" />
-        <h2>HSD draw graph materialized</h2>
-        <p>The GALE01 v1.02 disc file system is mounted; standScene is represented as native models, joints, materials, and primitive objects.</p>
-        <p class="next">Next milestone: relocate Melee's HSD data and render the first scene.</p>
-    </main>
-</body>
-</rml>
-)RML";
-
-class MeleeBootstrapDocument final : public partyboard::ui::Document {
-public:
-    MeleeBootstrapDocument()
-        : Document(kBootstrapDocument)
-    {
-    }
-};
 
 } // namespace
 
@@ -80,6 +53,7 @@ extern "C" int game_main(void)
         MeleeBootstrapLog.error(
             "Could not decode GmRgStnd.dat's standScene graph ({})",
             host_scene.last_error());
+        VISetWindowTitle(host_scene.last_error().c_str());
         meleeboard::disc::unmount();
         return 1;
     }
@@ -94,7 +68,11 @@ extern "C" int game_main(void)
         host_scene.joints().size(), host_scene.draw_objects().size(),
         stand_scene->models, stand_scene->cameras, stand_scene->lights,
         stand_scene->fogs);
-    partyboard::ui::push_document(std::make_unique<MeleeBootstrapDocument>());
+    meleeboard::hsd::MeleeSceneRenderer scene_renderer(host_scene);
+    MeleeBootstrapLog.info(
+        "standScene renderer: {} drawable objects, {} skipped objects, {} triangles",
+        scene_renderer.drawable_object_count(), scene_renderer.skipped_object_count(),
+        scene_renderer.submitted_triangle_count());
 
     while (PartyBoard_IsRunning) {
         const AuroraEvent* event = aurora_update();
@@ -116,7 +94,7 @@ extern "C" int game_main(void)
             continue;
         }
         meleeboard::hsd::tick_host_runtime();
-        partyboard::ui::update();
+        scene_renderer.render();
         aurora_end_frame();
     }
 

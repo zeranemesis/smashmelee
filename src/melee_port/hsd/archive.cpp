@@ -46,6 +46,7 @@ bool Archive::parse(std::vector<unsigned char> bytes)
     data_size_ = 0;
     public_table_offset_ = 0;
     symbols_offset_ = 0;
+    relocation_fields_.clear();
     bytes_.clear();
 
     if (bytes.size() < kHeaderSize) {
@@ -62,6 +63,7 @@ bool Archive::parse(std::vector<unsigned char> bytes)
     }
 
     size_t offset = kHeaderSize + data_size;
+    const size_t relocation_table_offset = offset;
     if (!advance(offset, relocation_count, kRelocationEntrySize, bytes.size())) {
         return false;
     }
@@ -87,11 +89,25 @@ bool Archive::parse(std::vector<unsigned char> bytes)
         }
     }
 
+    std::unordered_set<uint32_t> relocation_fields;
+    relocation_fields.reserve(relocation_count);
+    for (uint32_t index = 0; index < relocation_count; ++index) {
+        const size_t record = relocation_table_offset +
+            static_cast<size_t>(index) * kRelocationEntrySize;
+        const uint32_t field_offset = read_be_u32(bytes.data() + record);
+        if (data_size < sizeof(uint32_t) ||
+            field_offset > data_size - sizeof(uint32_t) ||
+            !relocation_fields.insert(field_offset).second) {
+            return false;
+        }
+    }
+
     bytes_ = std::move(bytes);
     public_count_ = public_count;
     data_size_ = data_size;
     public_table_offset_ = public_table_offset;
     symbols_offset_ = offset;
+    relocation_fields_ = std::move(relocation_fields);
     return true;
 }
 
@@ -149,6 +165,21 @@ std::optional<uint32_t> Archive::data_word(uint32_t data_offset) const
     return read_be_u32(bytes_.data() + kHeaderSize + data_offset);
 }
 
+std::optional<uint32_t> Archive::data_pointer(uint32_t field_offset) const
+{
+    const auto pointer = data_word(field_offset);
+    if (!pointer.has_value()) {
+        return std::nullopt;
+    }
+    if (relocation_fields_.contains(field_offset)) {
+        return pointer;
+    }
+    if (*pointer == 0) {
+        return uint32_t{ 0 };
+    }
+    return std::nullopt;
+}
+
 bool Archive::contains_data_range(uint32_t data_offset, uint32_t byte_count) const
 {
     return is_valid() && data_offset <= data_size_ &&
@@ -184,10 +215,10 @@ std::optional<SceneRoots> Archive::scene_roots(std::string_view symbol) const
     }
 
     SceneRoots scene{};
-    const auto models = data_word(*root);
-    const auto cameras = data_word(*root + 4);
-    const auto lights = data_word(*root + 8);
-    const auto fogs = data_word(*root + 12);
+    const auto models = data_pointer(*root);
+    const auto cameras = data_pointer(*root + 4);
+    const auto lights = data_pointer(*root + 8);
+    const auto fogs = data_pointer(*root + 12);
     if (!models || !cameras || !lights || !fogs) {
         return std::nullopt;
     }
@@ -226,7 +257,7 @@ std::optional<uint32_t> Archive::scene_model_count(
         }
         const uint32_t array_offset = scene->models +
             index * sizeof(uint32_t);
-        const auto model = data_word(array_offset);
+        const auto model = data_pointer(array_offset);
         if (!model.has_value()) {
             return std::nullopt;
         }
@@ -251,12 +282,12 @@ std::optional<uint32_t> Archive::scene_joint_count(std::string_view symbol) cons
 
     std::vector<uint32_t> pending;
     for (uint32_t index = 0; index < *model_count; ++index) {
-        const auto model = data_word(scene->models + index * sizeof(uint32_t));
+        const auto model = data_pointer(scene->models + index * sizeof(uint32_t));
         if (!model.has_value() || data_size_ < kDynamicModelDescSize ||
             *model > data_size_ - kDynamicModelDescSize) {
             return std::nullopt;
         }
-        const auto joint = data_word(*model);
+        const auto joint = data_pointer(*model);
         if (!joint.has_value()) {
             return std::nullopt;
         }
@@ -277,8 +308,8 @@ std::optional<uint32_t> Archive::scene_joint_count(std::string_view symbol) cons
             return std::nullopt;
         }
 
-        const auto child = data_word(joint + 0x08);
-        const auto next = data_word(joint + 0x0C);
+        const auto child = data_pointer(joint + 0x08);
+        const auto next = data_pointer(joint + 0x0C);
         if (!child.has_value() || !next.has_value()) {
             return std::nullopt;
         }

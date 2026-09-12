@@ -16,7 +16,10 @@ The first porting milestone is implemented:
 - the launcher recognizes only Melee `GALE01` revision 2;
 - Aurora mounts the selected disc image;
 - the Mario Party 4 `game_main` and DOL-address import are disabled in the default build;
-- a dedicated Melee bootstrap loop keeps the native window, renderer, input, and settings UI alive.
+- a dedicated Melee bootstrap loop keeps the native window, renderer, input, and settings UI alive;
+- the first indexed position mesh from `GmRgStnd.dat` is decoded through the
+  HSD relocation table and emitted as native Aurora GX draw calls using a
+  debug material and depth buffer.
 - a host-width-safe HSD object allocator, root class/object model, GObj
   scheduler, and logical GX frame setup are compiled and self-tested at startup.
 
