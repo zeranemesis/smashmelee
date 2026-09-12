@@ -45,6 +45,8 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       joint, and animation runtime objects;
 - [x] port FObj allocation, descriptor materialization, lifecycle, and request
       state so host animation objects have the upstream-compatible foundation;
+- [x] port AObj allocation, lifetime, playback state, and FObj ownership while
+      explicitly rejecting unresolved GameCube object references;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] advance the host HSD/GObj simulation on a bounded fixed 60 Hz clock,

@@ -3,6 +3,7 @@
 
 #include <melee/sysdolphin/baselib/class.h>
 #include <melee/sysdolphin/baselib/gobj.h>
+#include <melee/sysdolphin/baselib/aobj.h>
 #include <melee/sysdolphin/baselib/fobj.h>
 #include <melee/sysdolphin/baselib/id.h>
 #include <melee/sysdolphin/baselib/list.h>
@@ -124,6 +125,33 @@ bool verify_fobj_runtime()
     return requested && HSD_ObjAllocGetUsing(HSD_FObjGetAllocData()) == 0;
 }
 
+bool verify_aobj_runtime()
+{
+    HSD_AObjInitAllocData();
+    HSD_FObjInitAllocData();
+    HSD_AObj* animation = HSD_AObjAlloc();
+    HSD_FObj* channel = HSD_FObjAlloc();
+    if (animation == nullptr || channel == nullptr) {
+        HSD_AObjFree(animation);
+        HSD_FObjFree(channel);
+        return false;
+    }
+    channel->startframe = 4;
+    HSD_AObjSetFObj(animation, channel);
+    HSD_AObjSetRate(animation, 0.5F);
+    HSD_AObjSetEndFrame(animation, 30.0F);
+    HSD_AObjSetFlags(animation, AOBJ_LOOP);
+    HSD_AObjReqAnim(animation, 2.0F);
+    const bool requested = animation->curr_frame == 2.0F &&
+        animation->framerate == 0.5F && animation->end_frame == 30.0F &&
+        (HSD_AObjGetFlags(animation) & AOBJ_LOOP) != 0 &&
+        (HSD_AObjGetFlags(animation) & AOBJ_NO_ANIM) == 0 &&
+        HSD_FObjGetState(channel) == 1;
+    HSD_AObjRemove(animation);
+    return requested && HSD_ObjAllocGetUsing(HSD_AObjGetAllocData()) == 0 &&
+        HSD_ObjAllocGetUsing(HSD_FObjGetAllocData()) == 0;
+}
+
 } // namespace
 
 bool initialize_host_runtime()
@@ -175,7 +203,8 @@ bool initialize_host_runtime()
     if (!(aligned && initial_stats && free_list_reused && final_stats &&
           class_ready && references_work && class_stats &&
           verify_gobj_scheduler() && verify_core_collections() &&
-          verify_math_allocators() && verify_fobj_runtime())) {
+          verify_math_allocators() && verify_fobj_runtime() &&
+          verify_aobj_runtime())) {
         return false;
     }
 
