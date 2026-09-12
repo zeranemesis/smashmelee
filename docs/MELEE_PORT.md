@@ -46,6 +46,9 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       zero offsets, instead of treating GameCube pointers as host pointers;
 - [x] decode indexed position streams and render the supported `standScene`
       mesh hierarchy through Aurora GX with a temporary debug material;
+- [x] materialize the static HSD CObj camera (eye, interest, up vector,
+      viewport, projection and depth planes), retaining a debug fallback for
+      malformed or unsupported archives;
 - import the upstream `Runtime`, `sysdolphin`, and required `melee/lb` headers/sources;
 - make pointer-width and endian assumptions explicit;
 - compile object/class allocation, GObj scheduling, VI, and GX initialization;

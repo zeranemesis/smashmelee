@@ -21,6 +21,20 @@ struct HostJoint {
     std::array<float, 3> translation{};
 };
 
+// Host-safe camera data copied from HSD_CObjDesc/HSD_WObjDesc.  It intentionally
+// stores values rather than GameCube pointers so it can be handed to Aurora.
+struct HostCamera {
+    uint16_t flags = 0;
+    uint16_t projection_type = 0;
+    std::array<int16_t, 4> viewport{};
+    std::array<float, 3> eye{};
+    std::array<float, 3> interest{};
+    std::array<float, 3> up{ 0.0F, 1.0F, 0.0F };
+    float near_plane = 0.1F;
+    float far_plane = 1000.0F;
+    std::array<float, 4> projection{};
+};
+
 // GX vertex-array setup copied from a HSD_VtxDescList record.  The vertex
 // data remains in the archive until the host renderer uploads it.
 struct HostVertexDescriptor {
@@ -65,12 +79,14 @@ public:
     bool load(const Archive& archive, std::string_view symbol);
 
     const std::vector<HostJoint>& joints() const;
+    const std::vector<HostCamera>& cameras() const;
     const std::vector<HostDrawObject>& draw_objects() const;
     const std::vector<uint32_t>& model_roots() const;
     const std::string& last_error() const;
 
 private:
     std::vector<HostJoint> joints_;
+    std::vector<HostCamera> cameras_;
     std::vector<HostDrawObject> draw_objects_;
     std::vector<uint32_t> model_roots_;
     std::string last_error_;

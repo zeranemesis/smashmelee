@@ -15,6 +15,7 @@ namespace {
 
 constexpr uint32_t kMaxSceneJoints = 8192;
 constexpr uint32_t kMaxSceneDrawObjects = 32768;
+constexpr uint32_t kMaxSceneCameras = 16;
 constexpr uint32_t kMaxVertexDescriptors = 32;
 constexpr uint32_t kVertexDescriptorSize = 0x18;
 constexpr uint32_t kGxVertexAttributeNull = 0xFF;
@@ -375,11 +376,71 @@ bool read_transform(const Archive& archive, uint32_t offset,
     return true;
 }
 
+bool read_s16(const Archive& archive, uint32_t offset, int16_t& value)
+{
+    const auto high = archive.data_byte(offset);
+    const auto low = archive.data_byte(offset + 1);
+    if (!high.has_value() || !low.has_value()) {
+        return false;
+    }
+    value = static_cast<int16_t>((static_cast<uint16_t>(*high) << 8) | *low);
+    return true;
+}
+
+bool read_camera(const Archive& archive, uint32_t description, HostCamera& camera)
+{
+    const auto flags_projection = archive.data_word(description + 0x04);
+    const auto eye_description = archive.data_pointer(description + 0x18);
+    const auto interest_description = archive.data_pointer(description + 0x1C);
+    const auto near_plane = archive.data_float(description + 0x28);
+    const auto far_plane = archive.data_float(description + 0x2C);
+    if (!flags_projection.has_value() || !eye_description.has_value() ||
+        !interest_description.has_value() || !near_plane.has_value() ||
+        !far_plane.has_value() || *eye_description == 0 ||
+        *interest_description == 0 || *near_plane <= 0.0F ||
+        *far_plane <= *near_plane) {
+        return false;
+    }
+
+    camera.flags = static_cast<uint16_t>(*flags_projection >> 16);
+    camera.projection_type = static_cast<uint16_t>(*flags_projection);
+    for (uint32_t index = 0; index < camera.viewport.size(); ++index) {
+        if (!read_s16(archive, description + 0x08 + index * 2,
+                      camera.viewport[index])) {
+            return false;
+        }
+    }
+    if (!read_transform(archive, *eye_description + 0x04, camera.eye) ||
+        !read_transform(archive, *interest_description + 0x04,
+                        camera.interest)) {
+        return false;
+    }
+    camera.near_plane = *near_plane;
+    camera.far_plane = *far_plane;
+
+    if (camera.flags & 1) {
+        const auto up_vector = archive.data_pointer(description + 0x24);
+        if (up_vector.has_value() && *up_vector != 0 &&
+            !read_transform(archive, *up_vector, camera.up)) {
+            return false;
+        }
+    }
+    for (uint32_t index = 0; index < camera.projection.size(); ++index) {
+        const auto value = archive.data_float(description + 0x30 + index * 4);
+        if (!value.has_value()) {
+            return false;
+        }
+        camera.projection[index] = *value;
+    }
+    return true;
+}
+
 } // namespace
 
 bool HostScene::load(const Archive& archive, std::string_view symbol)
 {
     joints_.clear();
+    cameras_.clear();
     draw_objects_.clear();
     model_roots_.clear();
     last_error_ = "could not resolve HSD scene roots";
@@ -388,6 +449,30 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
     const auto model_count = archive.scene_model_count(symbol);
     if (!scene.has_value() || !model_count.has_value()) {
         return false;
+    }
+
+    // SceneCameraDesc is { HSD_CObjDesc* desc, HSD_CameraAnim** anims } and
+    // is terminated by a null desc.  Camera animation remains a later HSD
+    // milestone; this copies the static camera used by standScene.
+    if (scene->cameras != 0) {
+        for (uint32_t index = 0; index < kMaxSceneCameras; ++index) {
+            const uint32_t entry = scene->cameras + index * 8;
+            const auto camera_description = archive.data_pointer(entry);
+            if (!camera_description.has_value()) {
+                return false;
+            }
+            if (*camera_description == 0) {
+                break;
+            }
+            HostCamera camera{};
+            if (!read_camera(archive, *camera_description, camera)) {
+                // A malformed/unsupported camera must not discard otherwise
+                // renderable scene geometry; the renderer retains its debug
+                // camera fallback until a valid CObj is available.
+                continue;
+            }
+            cameras_.push_back(camera);
+        }
     }
 
     last_error_ = "could not build HSD joint hierarchy";
@@ -681,6 +766,11 @@ const std::string& HostScene::last_error() const
 const std::vector<HostJoint>& HostScene::joints() const
 {
     return joints_;
+}
+
+const std::vector<HostCamera>& HostScene::cameras() const
+{
+    return cameras_;
 }
 
 const std::vector<HostDrawObject>& HostScene::draw_objects() const

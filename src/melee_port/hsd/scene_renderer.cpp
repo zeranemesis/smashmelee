@@ -133,8 +133,8 @@ void MeleeSceneRenderer::render()
         }
     }
 
-    // A deterministic bounds-based camera is intentionally temporary.  It
-    // proves the HostScene path before CObj materialization is added.
+    // A deterministic bounds-based camera is retained as a fallback for
+    // archives without a usable static CObj.
     std::array<float, 3> minimum = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
     std::array<float, 3> maximum = { std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest() };
     bool has_geometry = false;
@@ -167,8 +167,40 @@ void MeleeSceneRenderer::render()
     Vec up = { 0.0F, 1.0F, 0.0F };
     Mtx view{};
     Mtx44 projection{};
+    GXProjectionType projection_type = GX_PERSPECTIVE;
+    if (!scene_.cameras().empty()) {
+        const HostCamera& camera = scene_.cameras().front();
+        eye = { camera.eye[0], camera.eye[1], camera.eye[2] };
+        target = { camera.interest[0], camera.interest[1], camera.interest[2] };
+        up = { camera.up[0], camera.up[1], camera.up[2] };
+        const float near_plane = std::max(0.001F, camera.near_plane);
+        const float far_plane = std::max(near_plane + 0.001F, camera.far_plane);
+        switch (camera.projection_type) {
+        case 1: // PROJ_PERSPECTIVE
+            MTXPerspective(projection, camera.projection[0], camera.projection[1],
+                           near_plane, far_plane);
+            break;
+        case 2: // PROJ_FRUSTUM
+            MTXFrustum(projection, camera.projection[0], camera.projection[1],
+                       camera.projection[2], camera.projection[3], near_plane,
+                       far_plane);
+            break;
+        case 3: // PROJ_ORTHO
+            MTXOrtho(projection, camera.projection[0], camera.projection[1],
+                     camera.projection[2], camera.projection[3], near_plane,
+                     far_plane);
+            projection_type = GX_ORTHOGRAPHIC;
+            break;
+        default:
+            MTXPerspective(projection, 45.0F, 4.0F / 3.0F,
+                           std::max(0.1F, extent * 0.01F), extent * 8.0F + 100.0F);
+            break;
+        }
+    } else {
+        MTXPerspective(projection, 45.0F, 4.0F / 3.0F,
+                       std::max(0.1F, extent * 0.01F), extent * 8.0F + 100.0F);
+    }
     MTXLookAt(view, &eye, &up, &target);
-    MTXPerspective(projection, 45.0F, 4.0F / 3.0F, std::max(0.1F, extent * 0.01F), extent * 8.0F + 100.0F);
     Matrix view_matrix{};
     for (uint32_t row = 0; row < 3; ++row) {
         for (uint32_t column = 0; column < 4; ++column) {
@@ -176,7 +208,7 @@ void MeleeSceneRenderer::render()
         }
     }
 
-    GXSetProjection(projection, GX_PERSPECTIVE);
+    GXSetProjection(projection, projection_type);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
