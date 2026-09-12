@@ -18,6 +18,14 @@ enum {
     HSD_A_OP_KEY = 6,
 };
 
+enum {
+    HSD_A_FRAC_FLOAT = 0x00,
+    HSD_A_FRAC_S16 = 0x20,
+    HSD_A_FRAC_U16 = 0x40,
+    HSD_A_FRAC_S8 = 0x60,
+    HSD_A_FRAC_U8 = 0x80,
+};
+
 typedef struct HSD_FObj {
     struct HSD_FObj* next;
     uint8_t* ad;
@@ -50,6 +58,18 @@ typedef struct HSD_FObjDesc {
     uint8_t* ad;
 } HSD_FObjDesc;
 
+// Animation bytecode and descriptors are materialized in host memory before
+// reaching these APIs.  This mirrors HSD_ObjData without importing a
+// GameCube-width pointer into the native runtime.
+typedef union HSD_ObjData {
+    float fv;
+    int32_t iv;
+    float vector[3];
+} HSD_ObjData;
+
+typedef void (*HSD_ObjUpdateFunc)(void* object, uint32_t type,
+                                  HSD_ObjData* value);
+
 HSD_ObjAllocData* HSD_FObjGetAllocData(void);
 void HSD_FObjInitAllocData(void);
 HSD_FObj* HSD_FObjAlloc(void);
@@ -59,6 +79,14 @@ void HSD_FObjRemoveAll(HSD_FObj* fobj);
 uint32_t HSD_FObjSetState(HSD_FObj* fobj, uint32_t state);
 uint32_t HSD_FObjGetState(HSD_FObj* fobj);
 void HSD_FObjReqAnimAll(HSD_FObj* fobj, float startframe);
+void HSD_FObjStopAnim(HSD_FObj* fobj, void* object,
+                      HSD_ObjUpdateFunc update_function, float rate);
+void HSD_FObjStopAnimAll(HSD_FObj* fobj, void* object,
+                         HSD_ObjUpdateFunc update_function, float rate);
+void HSD_FObjInterpretAnim(HSD_FObj* fobj, void* object,
+                           HSD_ObjUpdateFunc update_function, float rate);
+void HSD_FObjInterpretAnimAll(HSD_FObj* fobj, void* object,
+                              HSD_ObjUpdateFunc update_function, float rate);
 HSD_FObj* HSD_FObjLoadDesc(HSD_FObjDesc* description);
 
 #ifdef __cplusplus

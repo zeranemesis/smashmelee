@@ -37,6 +37,20 @@ void record_gobj(HSD_GObj* gobj)
     probe->order[(*probe->count)++] = probe->value;
 }
 
+struct FObjProbe {
+    uint32_t type = 0;
+    float value = 0.0F;
+    uint32_t updates = 0;
+};
+
+void record_fobj(void* object, uint32_t type, HSD_ObjData* value)
+{
+    auto* probe = static_cast<FObjProbe*>(object);
+    probe->type = type;
+    probe->value = value->fv;
+    ++probe->updates;
+}
+
 bool verify_gobj_scheduler()
 {
     uint8_t order[2]{};
@@ -122,7 +136,28 @@ bool verify_fobj_runtime()
     const bool requested = first->time == 15.0F &&
         HSD_FObjGetState(first) == 1 && HSD_FObjGetState(second) == 1;
     HSD_FObjRemoveAll(first);
-    return requested && HSD_ObjAllocGetUsing(HSD_FObjGetAllocData()) == 0;
+
+    // Two U8 constant keys, each followed by a one-frame wait. This verifies
+    // pack decoding, state transitions, and the native callback bridge.
+    uint8_t stream[] = { HSD_A_OP_CON, 0x10, 7, 1, 9, 1 };
+    HSD_FObj* decoded = HSD_FObjAlloc();
+    if (decoded == nullptr) {
+        return false;
+    }
+    decoded->ad_head = stream;
+    decoded->length = sizeof(stream);
+    decoded->frac_value = HSD_A_FRAC_U8;
+    decoded->obj_type = 17;
+    FObjProbe probe{};
+    HSD_FObjReqAnimAll(decoded, 0.0F);
+    HSD_FObjInterpretAnim(decoded, &probe, record_fobj, 0.0F);
+    const bool first_key = probe.updates == 1 && probe.type == 17 &&
+        probe.value == 7.0F;
+    HSD_FObjInterpretAnim(decoded, &probe, record_fobj, 1.0F);
+    const bool second_key = probe.updates == 2 && probe.value == 9.0F;
+    HSD_FObjRemove(decoded);
+    return requested && first_key && second_key &&
+        HSD_ObjAllocGetUsing(HSD_FObjGetAllocData()) == 0;
 }
 
 bool verify_aobj_runtime()

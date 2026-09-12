@@ -47,6 +47,10 @@ void HSD_AObjSetFlags(HSD_AObj* aobj, uint32_t flags);
 void HSD_AObjClearFlags(HSD_AObj* aobj, uint32_t flags);
 void HSD_AObjSetFObj(HSD_AObj* aobj, HSD_FObj* fobj);
 void HSD_AObjReqAnim(HSD_AObj* aobj, float frame);
+void HSD_AObjStopAnim(HSD_AObj* aobj, void* object,
+                      HSD_ObjUpdateFunc update_function);
+void HSD_AObjInterpretAnim(HSD_AObj* aobj, void* object,
+                           HSD_ObjUpdateFunc update_function);
 void HSD_AObjSetRate(HSD_AObj* aobj, float rate);
 void HSD_AObjSetRewindFrame(HSD_AObj* aobj, float frame);
 void HSD_AObjSetEndFrame(HSD_AObj* aobj, float frame);

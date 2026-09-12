@@ -1,5 +1,6 @@
 #include <melee/sysdolphin/baselib/aobj.h>
 
+#include <cmath>
 #include <cstring>
 
 namespace {
@@ -85,6 +86,51 @@ extern "C" void HSD_AObjReqAnim(HSD_AObj* aobj, float frame)
     aobj->curr_frame = frame;
     aobj->flags = (aobj->flags & ~AOBJ_NO_ANIM) | AOBJ_FIRST_PLAY;
     HSD_FObjReqAnimAll(aobj->fobj, frame);
+}
+
+extern "C" void HSD_AObjStopAnim(HSD_AObj* aobj, void* object,
+                                   HSD_ObjUpdateFunc update_function)
+{
+    if (aobj == nullptr) {
+        return;
+    }
+    HSD_FObjStopAnimAll(aobj->fobj, object, update_function, aobj->framerate);
+    aobj->flags |= AOBJ_NO_ANIM;
+}
+
+extern "C" void HSD_AObjInterpretAnim(HSD_AObj* aobj, void* object,
+                                        HSD_ObjUpdateFunc update_function)
+{
+    if (aobj == nullptr || (aobj->flags & AOBJ_NO_ANIM) != 0) {
+        return;
+    }
+    float rate = 0.0F;
+    if ((aobj->flags & AOBJ_FIRST_PLAY) != 0) {
+        aobj->flags &= ~AOBJ_FIRST_PLAY;
+    } else {
+        rate = aobj->framerate;
+        aobj->curr_frame += rate;
+    }
+    if ((aobj->flags & AOBJ_LOOP) != 0 && aobj->end_frame <= aobj->curr_frame) {
+        if (aobj->rewind_frame < aobj->end_frame) {
+            HSD_FObjStopAnimAll(aobj->fobj, object, update_function, rate);
+            const float duration = aobj->end_frame - aobj->rewind_frame;
+            aobj->curr_frame = std::fmod(aobj->curr_frame - aobj->rewind_frame,
+                                         duration) + aobj->rewind_frame;
+            HSD_FObjReqAnimAll(aobj->fobj, aobj->curr_frame);
+        } else {
+            aobj->curr_frame = aobj->end_frame;
+        }
+        rate = 0.0F;
+        aobj->flags |= AOBJ_REWINDED;
+    } else {
+        aobj->flags &= ~AOBJ_REWINDED;
+    }
+    HSD_FObjInterpretAnimAll(aobj->fobj, object,
+        (aobj->flags & AOBJ_NO_UPDATE) != 0 ? nullptr : update_function, rate);
+    if ((aobj->flags & AOBJ_LOOP) == 0 && aobj->end_frame <= aobj->curr_frame) {
+        HSD_AObjStopAnim(aobj, object, update_function);
+    }
 }
 
 extern "C" void HSD_AObjSetRate(HSD_AObj* aobj, float rate)
