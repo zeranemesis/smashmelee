@@ -80,6 +80,7 @@ set(GAME_FILES
 set(PORT_FILES
         src/melee_port/disc_mount.cpp
         src/melee_port/bootstrap.cpp
+        src/melee_port/hsd/animation.cpp
         src/melee_port/hsd/archive.cpp
         src/melee_port/hsd/aobj.cpp
         src/melee_port/hsd/class.cpp

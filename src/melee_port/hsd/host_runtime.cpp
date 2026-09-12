@@ -1,6 +1,8 @@
 #include "host_runtime.hpp"
 #include "video.hpp"
+#include "animation.hpp"
 
+#include <melee/sysdolphin/baselib/archive.hpp>
 #include <melee/sysdolphin/baselib/class.h>
 #include <melee/sysdolphin/baselib/gobj.h>
 #include <melee/sysdolphin/baselib/aobj.h>
@@ -13,6 +15,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <vector>
 
 namespace meleeboard::hsd {
 
@@ -49,6 +53,76 @@ void record_fobj(void* object, uint32_t type, HSD_ObjData* value)
     probe->type = type;
     probe->value = value->fv;
     ++probe->updates;
+}
+
+void write_be_word(std::vector<unsigned char>& bytes, size_t offset, uint32_t value)
+{
+    bytes[offset] = static_cast<unsigned char>(value >> 24U);
+    bytes[offset + 1] = static_cast<unsigned char>(value >> 16U);
+    bytes[offset + 2] = static_cast<unsigned char>(value >> 8U);
+    bytes[offset + 3] = static_cast<unsigned char>(value);
+}
+
+void write_be_float(std::vector<unsigned char>& bytes, size_t offset, float value)
+{
+    uint32_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value));
+    std::memcpy(&bits, &value, sizeof(bits));
+    write_be_word(bytes, offset, bits);
+}
+
+bool verify_animation_materialization()
+{
+    constexpr size_t kHeaderSize = 0x20;
+    constexpr size_t kDataSize = 0x80;
+    constexpr size_t kRelocationCount = 3;
+    constexpr size_t kPublicCount = 1;
+    constexpr size_t kSymbolBytes = sizeof("testAnim");
+    const size_t relocation_offset = kHeaderSize + kDataSize;
+    const size_t public_offset = relocation_offset + kRelocationCount * 4;
+    const size_t symbols_offset = public_offset + kPublicCount * 8;
+    std::vector<unsigned char> bytes(symbols_offset + kSymbolBytes);
+    write_be_word(bytes, 0x00, static_cast<uint32_t>(bytes.size()));
+    write_be_word(bytes, 0x04, kDataSize);
+    write_be_word(bytes, 0x08, kRelocationCount);
+    write_be_word(bytes, 0x0C, kPublicCount);
+    // AnimJoint at data+0; its AObjDesc is data+0x20.
+    write_be_word(bytes, kHeaderSize + 0x08, 0x20);
+    // AObjDesc at data+0x20; its FObjDesc is data+0x40.
+    write_be_word(bytes, kHeaderSize + 0x20, AOBJ_LOOP);
+    write_be_float(bytes, kHeaderSize + 0x24, 20.0F);
+    write_be_word(bytes, kHeaderSize + 0x28, 0x40);
+    // FObjDesc at data+0x40; bytecode is data+0x60.
+    write_be_word(bytes, kHeaderSize + 0x44, 4);
+    write_be_float(bytes, kHeaderSize + 0x48, 3.0F);
+    bytes[kHeaderSize + 0x4C] = 12;
+    bytes[kHeaderSize + 0x4D] = HSD_A_FRAC_U8;
+    bytes[kHeaderSize + 0x4E] = HSD_A_FRAC_U8;
+    write_be_word(bytes, kHeaderSize + 0x50, 0x60);
+    bytes[kHeaderSize + 0x60] = HSD_A_OP_CON;
+    bytes[kHeaderSize + 0x61] = 0;
+    bytes[kHeaderSize + 0x62] = 7;
+    bytes[kHeaderSize + 0x63] = 1;
+    write_be_word(bytes, relocation_offset, 0x08);
+    write_be_word(bytes, relocation_offset + 4, 0x28);
+    write_be_word(bytes, relocation_offset + 8, 0x50);
+    write_be_word(bytes, public_offset, 0);
+    write_be_word(bytes, public_offset + 4, 0);
+    std::memcpy(bytes.data() + symbols_offset, "testAnim", kSymbolBytes);
+
+    Archive archive;
+    HostAnimation animation;
+    if (!archive.parse(std::move(bytes)) || !animation.load(archive, "testAnim") ||
+        animation.joints().size() != 1) {
+        return false;
+    }
+    const HostAnimationJoint& joint = animation.joints().front();
+    return joint.has_object && joint.object.flags == AOBJ_LOOP &&
+        joint.object.end_frame == 20.0F && joint.object.channels.size() == 1 &&
+        joint.object.channels.front().start_frame == 3 &&
+        joint.object.channels.front().object_type == 12 &&
+        joint.object.channels.front().bytecode ==
+            std::vector<uint8_t>{ HSD_A_OP_CON, 0, 7, 1 };
 }
 
 bool verify_gobj_scheduler()
@@ -239,7 +313,7 @@ bool initialize_host_runtime()
           class_ready && references_work && class_stats &&
           verify_gobj_scheduler() && verify_core_collections() &&
           verify_math_allocators() && verify_fobj_runtime() &&
-          verify_aobj_runtime())) {
+          verify_aobj_runtime() && verify_animation_materialization())) {
         return false;
     }
 
