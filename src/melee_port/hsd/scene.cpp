@@ -1196,6 +1196,11 @@ const std::string& HostScene::last_error() const
     return last_error_;
 }
 
+std::vector<HostJoint>& HostScene::joints()
+{
+    return joints_;
+}
+
 const std::vector<HostJoint>& HostScene::joints() const
 {
     return joints_;

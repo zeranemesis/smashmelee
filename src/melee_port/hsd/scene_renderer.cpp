@@ -17,6 +17,8 @@
 namespace meleeboard::hsd {
 namespace {
 
+constexpr uint32_t kJointHidden = 1U << 4;
+
 using Matrix = std::array<float, 12>;
 
 Matrix identity()
@@ -307,6 +309,10 @@ void MeleeSceneRenderer::render()
     for (uint32_t object_index = 0; object_index < objects.size(); ++object_index) {
         const HostDrawObject& object = objects[object_index];
         if (!drawable(object) || object_owner[object_index] < 0) {
+            continue;
+        }
+        if ((joints[static_cast<size_t>(object_owner[object_index])].flags &
+             kJointHidden) != 0) {
             continue;
         }
         const Matrix model_view = multiply(
