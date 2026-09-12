@@ -5,6 +5,7 @@
 #include <melee/sysdolphin/baselib/gobj.h>
 #include <melee/sysdolphin/baselib/id.h>
 #include <melee/sysdolphin/baselib/list.h>
+#include <melee/sysdolphin/baselib/mtx.h>
 #include <melee/sysdolphin/baselib/object.h>
 #include <melee/sysdolphin/baselib/objalloc.h>
 
@@ -87,6 +88,21 @@ bool verify_core_collections()
     return list_ready && list == nullptr && ids_ready && removal_works;
 }
 
+bool verify_math_allocators()
+{
+    HSD_VecInitAllocData();
+    HSD_MtxInitAllocData();
+    void* vector = HSD_VecAlloc();
+    void* matrix = HSD_MtxAlloc();
+    const bool allocated = vector != nullptr && matrix != nullptr &&
+        HSD_ObjAllocGetUsing(HSD_VecGetAllocData()) == 1 &&
+        HSD_ObjAllocGetUsing(HSD_MtxGetAllocData()) == 1;
+    HSD_VecFree(vector);
+    HSD_MtxFree(matrix);
+    return allocated && HSD_ObjAllocGetUsing(HSD_VecGetAllocData()) == 0 &&
+        HSD_ObjAllocGetUsing(HSD_MtxGetAllocData()) == 0;
+}
+
 } // namespace
 
 bool initialize_host_runtime()
@@ -137,7 +153,8 @@ bool initialize_host_runtime()
 
     if (!(aligned && initial_stats && free_list_reused && final_stats &&
           class_ready && references_work && class_stats &&
-          verify_gobj_scheduler() && verify_core_collections())) {
+          verify_gobj_scheduler() && verify_core_collections() &&
+          verify_math_allocators())) {
         return false;
     }
 

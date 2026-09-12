@@ -86,6 +86,7 @@ set(PORT_FILES
         src/melee_port/hsd/host_runtime.cpp
         src/melee_port/hsd/id.cpp
         src/melee_port/hsd/list.cpp
+        src/melee_port/hsd/mtx_alloc.cpp
         src/melee_port/hsd/object.cpp
         src/melee_port/hsd/objalloc.cpp
         src/melee_port/hsd/scene.cpp

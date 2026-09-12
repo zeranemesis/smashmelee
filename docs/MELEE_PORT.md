@@ -41,6 +41,8 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       safe deferred removal;
 - [x] port the HSD singly-linked collection allocator and the 101-bucket ID
       table used by scene/object dependency registration;
+- [x] port the HSD host vector and matrix allocation pools used by camera,
+      joint, and animation runtime objects;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] mount a local GALE01 v1.02 ISO/RVZ, expose its GameCube FST, and materialize the `standScene` model/joint transforms from `GmRgStnd.dat` without unsafe host-pointer casts;
