@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
@@ -28,6 +29,7 @@ public:
     uint32_t data_size() const;
     uint32_t public_symbol_count() const;
     bool has_public_symbol(std::string_view symbol) const;
+    std::vector<std::string> public_symbols() const;
 
     // Data offsets deliberately remain GameCube 32-bit offsets.  Native code
     // must resolve them through a host address model instead of casting them.
@@ -46,6 +48,7 @@ public:
     std::optional<SceneRoots> scene_roots(std::string_view symbol) const;
     std::optional<uint32_t> scene_model_count(std::string_view symbol) const;
     std::optional<uint32_t> scene_joint_count(std::string_view symbol) const;
+    std::optional<uint32_t> joint_tree_count(std::string_view symbol) const;
 
 private:
     uint32_t public_count_ = 0;

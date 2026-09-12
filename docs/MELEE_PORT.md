@@ -55,6 +55,9 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       bounds before they can be attached to rendered joints;
 - [x] execute materialized joint animations against explicit `HostJoint`
       mappings for rotation, translation, scale, and node visibility;
+- [x] validate the upstream main-menu pair from `MnMaAll.dat` on GALE01 v1.02:
+      `MenMainBack_Top_animjoint` and `MenMainBack_Top_joint` both contain 102
+      corresponding hierarchy nodes;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] advance the host HSD/GObj simulation on a bounded fixed 60 Hz clock,

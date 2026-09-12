@@ -136,6 +136,23 @@ bool Archive::has_public_symbol(std::string_view symbol) const
     return public_symbol_offset(symbol).has_value();
 }
 
+std::vector<std::string> Archive::public_symbols() const
+{
+    std::vector<std::string> result;
+    if (!is_valid()) {
+        return result;
+    }
+    result.reserve(public_count_);
+    for (uint32_t index = 0; index < public_count_; ++index) {
+        const size_t record = public_table_offset_ +
+            static_cast<size_t>(index) * kSymbolEntrySize;
+        const uint32_t symbol_offset = read_be_u32(bytes_.data() + record + 4);
+        result.emplace_back(reinterpret_cast<const char*>(
+            bytes_.data() + symbols_offset_ + symbol_offset));
+    }
+    return result;
+}
+
 std::optional<uint32_t> Archive::public_symbol_offset(
     std::string_view symbol) const
 {
@@ -319,6 +336,35 @@ std::optional<uint32_t> Archive::scene_joint_count(std::string_view symbol) cons
         if (*next != 0) {
             pending.push_back(*next);
         }
+    }
+    return static_cast<uint32_t>(visited.size());
+}
+
+std::optional<uint32_t> Archive::joint_tree_count(std::string_view symbol) const
+{
+    const auto root = public_symbol_offset(symbol);
+    if (!root.has_value()) {
+        return std::nullopt;
+    }
+    std::vector<uint32_t> pending{ *root };
+    std::unordered_set<uint32_t> visited;
+    while (!pending.empty()) {
+        const uint32_t joint = pending.back();
+        pending.pop_back();
+        if (!visited.insert(joint).second) {
+            continue;
+        }
+        if (visited.size() > kMaxSceneJoints || data_size_ < kJointDescSize ||
+            joint > data_size_ - kJointDescSize) {
+            return std::nullopt;
+        }
+        const auto child = data_pointer(joint + 0x08);
+        const auto sibling = data_pointer(joint + 0x0C);
+        if (!child.has_value() || !sibling.has_value()) {
+            return std::nullopt;
+        }
+        if (*child != 0) pending.push_back(*child);
+        if (*sibling != 0) pending.push_back(*sibling);
     }
     return static_cast<uint32_t>(visited.size());
 }

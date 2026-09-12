@@ -1,6 +1,7 @@
 #ifdef MELEE_BOOTSTRAP
 
 #include "hsd/host_runtime.hpp"
+#include "hsd/animation.hpp"
 #include "hsd/scene.hpp"
 #include "hsd/scene_renderer.hpp"
 
@@ -45,6 +46,34 @@ extern "C" int game_main(void)
         MeleeBootstrapLog.error("Could not parse GmRgStnd.dat");
         meleeboard::disc::unmount();
         return 1;
+    }
+    const auto archive_symbols = archive.public_symbols();
+    MeleeBootstrapLog.info("GmRgStnd.dat exports {} HSD symbols", archive_symbols.size());
+    for (const std::string& symbol : archive_symbols) {
+        if (symbol.find("anim_joint") != std::string::npos ||
+            symbol.find("animjoint") != std::string::npos) {
+            MeleeBootstrapLog.info("GmRgStnd.dat animation symbol: {}", symbol);
+        }
+    }
+
+    // The reference main-menu flow loads this exact archive/symbol pair in
+    // mnmain.c. Validate the native animation path against the user's disc,
+    // but keep the standScene bootstrap usable if optional menu data is absent.
+    std::vector<unsigned char> menu_bytes;
+    if (meleeboard::disc::read_file("MnMaAll.dat", menu_bytes)) {
+        meleeboard::hsd::Archive menu_archive;
+        meleeboard::hsd::HostAnimation menu_animation;
+        if (menu_archive.parse(std::move(menu_bytes)) &&
+            menu_animation.load(menu_archive, "MenMainBack_Top_animjoint")) {
+            const auto model_joints =
+                menu_archive.joint_tree_count("MenMainBack_Top_joint");
+            MeleeBootstrapLog.info(
+                "Validated MnMaAll.dat main-menu animation: {} animation joints, {} model joints",
+                menu_animation.joints().size(), model_joints.value_or(0));
+        } else {
+            MeleeBootstrapLog.warn(
+                "Could not materialize MnMaAll.dat's MenMainBack animation");
+        }
     }
     const auto stand_scene = archive.scene_roots("standScene");
     const auto model_count = archive.scene_model_count("standScene");
