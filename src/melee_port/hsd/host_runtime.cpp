@@ -1,6 +1,8 @@
 #include "host_runtime.hpp"
 #include "video.hpp"
 #include "animation.hpp"
+#include "animation_player.hpp"
+#include "scene.hpp"
 
 #include <melee/sysdolphin/baselib/archive.hpp>
 #include <melee/sysdolphin/baselib/class.h>
@@ -93,16 +95,18 @@ bool verify_animation_materialization()
     write_be_float(bytes, kHeaderSize + 0x24, 20.0F);
     write_be_word(bytes, kHeaderSize + 0x28, 0x40);
     // FObjDesc at data+0x40; bytecode is data+0x60.
-    write_be_word(bytes, kHeaderSize + 0x44, 4);
-    write_be_float(bytes, kHeaderSize + 0x48, 3.0F);
-    bytes[kHeaderSize + 0x4C] = 12;
+    write_be_word(bytes, kHeaderSize + 0x44, 6);
+    write_be_float(bytes, kHeaderSize + 0x48, 0.0F);
+    bytes[kHeaderSize + 0x4C] = 5; // HSD_A_J_TRAX
     bytes[kHeaderSize + 0x4D] = HSD_A_FRAC_U8;
     bytes[kHeaderSize + 0x4E] = HSD_A_FRAC_U8;
     write_be_word(bytes, kHeaderSize + 0x50, 0x60);
     bytes[kHeaderSize + 0x60] = HSD_A_OP_CON;
-    bytes[kHeaderSize + 0x61] = 0;
+    bytes[kHeaderSize + 0x61] = 0x10;
     bytes[kHeaderSize + 0x62] = 7;
     bytes[kHeaderSize + 0x63] = 1;
+    bytes[kHeaderSize + 0x64] = 9;
+    bytes[kHeaderSize + 0x65] = 1;
     write_be_word(bytes, relocation_offset, 0x08);
     write_be_word(bytes, relocation_offset + 4, 0x28);
     write_be_word(bytes, relocation_offset + 8, 0x50);
@@ -117,12 +121,21 @@ bool verify_animation_materialization()
         return false;
     }
     const HostAnimationJoint& joint = animation.joints().front();
-    return joint.has_object && joint.object.flags == AOBJ_LOOP &&
+    if (!(joint.has_object && joint.object.flags == AOBJ_LOOP &&
         joint.object.end_frame == 20.0F && joint.object.channels.size() == 1 &&
-        joint.object.channels.front().start_frame == 3 &&
-        joint.object.channels.front().object_type == 12 &&
+        joint.object.channels.front().start_frame == 0 &&
+        joint.object.channels.front().object_type == 5 &&
         joint.object.channels.front().bytecode ==
-            std::vector<uint8_t>{ HSD_A_OP_CON, 0, 7, 1 };
+            std::vector<uint8_t>{ HSD_A_OP_CON, 0x10, 7, 1, 9, 1 })) {
+        return false;
+    }
+    std::vector<HostJoint> joints(1);
+    HostAnimationPlayer player;
+    if (!player.attach(animation, joints, { 0 })) {
+        return false;
+    }
+    player.tick();
+    return joints.front().translation[0] == 7.0F;
 }
 
 bool verify_gobj_scheduler()

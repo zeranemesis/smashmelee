@@ -53,6 +53,8 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
 - [x] materialize HSD `AnimJoint`/`AObjDesc`/`FObjDesc` trees into host-owned
       animation data, validating relocations, hierarchy cycles, and bytecode
       bounds before they can be attached to rendered joints;
+- [x] execute materialized joint animations against explicit `HostJoint`
+      mappings for rotation, translation, scale, and node visibility;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] advance the host HSD/GObj simulation on a bounded fixed 60 Hz clock,
