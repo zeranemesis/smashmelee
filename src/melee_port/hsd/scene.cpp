@@ -30,12 +30,16 @@ constexpr uint8_t kGxPoints = 0xB8;
 constexpr uint32_t kGxDirect = 1;
 constexpr uint32_t kGxIndex8 = 2;
 constexpr uint32_t kGxIndex16 = 3;
+constexpr uint32_t kGxPosition = 9;
+constexpr uint32_t kGxNormal = 10;
 
 bool parse_display_list(const Archive& archive, HostDrawObject& object)
 {
     uint32_t bytes_per_vertex = 0;
     uint32_t position_index_offset = UINT32_MAX;
     uint32_t position_index_width = 0;
+    uint32_t normal_index_offset = UINT32_MAX;
+    uint32_t normal_index_width = 0;
     for (const HostVertexDescriptor& descriptor : object.vertex_descriptors) {
         uint32_t attribute_bytes = 0;
         switch (descriptor.attribute_type) {
@@ -58,13 +62,19 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
         default:
             return false;
         }
-        if (descriptor.attribute == 9) { // GX_VA_POS
+        if (descriptor.attribute == kGxPosition) {
             if (descriptor.attribute_type != kGxIndex8 &&
                 descriptor.attribute_type != kGxIndex16) {
                 return false;
             }
             position_index_offset = bytes_per_vertex;
             position_index_width = attribute_bytes;
+        }
+        if (descriptor.attribute == kGxNormal &&
+            (descriptor.attribute_type == kGxIndex8 ||
+             descriptor.attribute_type == kGxIndex16)) {
+            normal_index_offset = bytes_per_vertex;
+            normal_index_width = attribute_bytes;
         }
         bytes_per_vertex += attribute_bytes;
     }
@@ -99,7 +109,9 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
         }
 
         std::vector<uint32_t> position_indices;
+        std::vector<uint32_t> normal_indices;
         position_indices.reserve(vertices);
+        normal_indices.reserve(vertices);
         for (uint32_t vertex = 0; vertex < vertices; ++vertex) {
             const uint32_t position_offset = cursor +
                 vertex * bytes_per_vertex + position_index_offset;
@@ -118,13 +130,34 @@ bool parse_display_list(const Archive& archive, HostDrawObject& object)
                 position_index = (position_index << 8) | *second;
             }
             position_indices.push_back(position_index);
+            uint32_t normal_index = UINT32_MAX;
+            if (normal_index_offset != UINT32_MAX) {
+                const auto normal_first = archive.data_byte(object.display_list +
+                    cursor + vertex * bytes_per_vertex + normal_index_offset);
+                if (!normal_first.has_value()) {
+                    return false;
+                }
+                normal_index = *normal_first;
+                if (normal_index_width == 2) {
+                    const auto normal_second = archive.data_byte(object.display_list +
+                        cursor + vertex * bytes_per_vertex + normal_index_offset + 1);
+                    if (!normal_second.has_value()) {
+                        return false;
+                    }
+                    normal_index = (normal_index << 8) | *normal_second;
+                }
+            }
+            normal_indices.push_back(normal_index);
         }
-        const auto append_triangle = [&object, &position_indices](uint32_t a,
-                                                                   uint32_t b,
-                                                                   uint32_t c) {
+        const auto append_triangle = [&object, &position_indices, &normal_indices](uint32_t a,
+                                                                                     uint32_t b,
+                                                                                     uint32_t c) {
             object.triangle_position_indices.push_back(position_indices[a]);
             object.triangle_position_indices.push_back(position_indices[b]);
             object.triangle_position_indices.push_back(position_indices[c]);
+            object.triangle_normal_indices.push_back(normal_indices[a]);
+            object.triangle_normal_indices.push_back(normal_indices[b]);
+            object.triangle_normal_indices.push_back(normal_indices[c]);
         };
         const uint8_t primitive = *command & kGxOpcodeMask;
         switch (primitive) {
@@ -181,7 +214,7 @@ bool read_position(const Archive& archive,
                    const HostVertexDescriptor& descriptor, uint32_t index,
                    std::array<float, 3>& position, std::string& error)
 {
-    if (descriptor.attribute != 9) {
+    if (descriptor.attribute != kGxPosition) {
         error = "position descriptor has a non-position attribute";
         return false;
     }
@@ -262,6 +295,58 @@ bool read_position(const Archive& archive,
     return true;
 }
 
+bool read_normal(const Archive& archive, const HostVertexDescriptor& descriptor,
+                 uint32_t index, std::array<float, 3>& normal,
+                 std::string& error)
+{
+    if (descriptor.attribute != kGxNormal || descriptor.component_count > 1) {
+        error = "normal descriptor has an unsupported component count";
+        return false;
+    }
+    uint32_t component_size = 0;
+    switch (descriptor.component_type) {
+    case 0: case 1: component_size = 1; break;
+    case 2: case 3: component_size = 2; break;
+    case 4: component_size = 4; break;
+    default: error = "normal descriptor has an unsupported component type"; return false;
+    }
+    if (descriptor.stride < component_size * 3) {
+        error = "normal descriptor stride is shorter than its components";
+        return false;
+    }
+    const uint64_t offset = static_cast<uint64_t>(descriptor.vertex_data) +
+        static_cast<uint64_t>(index) * descriptor.stride;
+    if (offset > std::numeric_limits<uint32_t>::max() ||
+        !archive.contains_data_range(static_cast<uint32_t>(offset), component_size * 3)) {
+        error = "normal index points outside the HSD vertex array";
+        return false;
+    }
+    for (uint32_t component = 0; component < 3; ++component) {
+        const uint32_t at = static_cast<uint32_t>(offset) + component * component_size;
+        float value = 0;
+        if (descriptor.component_type == 4) {
+            const auto floating = archive.data_float(at);
+            if (!floating.has_value()) { error = "floating-point normal lies outside the HSD data"; return false; }
+            value = *floating;
+        } else {
+            const auto first = archive.data_byte(at);
+            if (!first.has_value()) { error = "integer normal lies outside the HSD data"; return false; }
+            int32_t integer = *first;
+            if (component_size == 2) {
+                const auto second = archive.data_byte(at + 1);
+                if (!second.has_value()) { error = "16-bit normal lies outside the HSD data"; return false; }
+                integer = (integer << 8) | *second;
+                if (descriptor.component_type == 3) integer = static_cast<int16_t>(integer);
+            } else if (descriptor.component_type == 1) {
+                integer = static_cast<int8_t>(integer);
+            }
+            value = std::ldexp(static_cast<float>(integer), -static_cast<int>(descriptor.fraction));
+        }
+        normal[component] = value;
+    }
+    return true;
+}
+
 bool materialize_positions(const Archive& archive, HostDrawObject& object,
                            std::string& error)
 {
@@ -301,6 +386,39 @@ bool materialize_positions(const Archive& archive, HostDrawObject& object,
         object.positions.push_back(position);
         host_indices.emplace(source_index, host_index);
         object.triangle_indices.push_back(host_index);
+    }
+    return true;
+}
+
+bool materialize_normals(const Archive& archive, HostDrawObject& object,
+                         std::string& error)
+{
+    if (object.triangle_normal_indices.empty() ||
+        std::all_of(object.triangle_normal_indices.begin(),
+                    object.triangle_normal_indices.end(),
+                    [](uint32_t index) { return index == UINT32_MAX; })) {
+        return true;
+    }
+    const auto descriptor = std::find_if(object.vertex_descriptors.begin(),
+        object.vertex_descriptors.end(), [](const HostVertexDescriptor& candidate) {
+            return candidate.attribute == kGxNormal;
+        });
+    if (descriptor == object.vertex_descriptors.end() ||
+        (descriptor->attribute_type != kGxIndex8 && descriptor->attribute_type != kGxIndex16)) {
+        error = "normal stream has no indexed normal descriptor";
+        return false;
+    }
+    std::unordered_map<uint32_t, uint32_t> host_indices;
+    for (uint32_t& source_index : object.triangle_normal_indices) {
+        if (source_index == UINT32_MAX) continue;
+        const auto existing = host_indices.find(source_index);
+        if (existing != host_indices.end()) { source_index = existing->second; continue; }
+        std::array<float, 3> normal{};
+        if (!read_normal(archive, *descriptor, source_index, normal, error)) return false;
+        const uint32_t host_index = static_cast<uint32_t>(object.normals.size());
+        object.normals.push_back(normal);
+        host_indices.emplace(source_index, host_index);
+        source_index = host_index;
     }
     return true;
 }
@@ -359,6 +477,12 @@ bool materialize_primitive(const Archive& archive, uint32_t primitive,
         object.position_decode_error = std::move(position_error);
         object.positions.clear();
         object.triangle_indices.clear();
+    }
+    std::string normal_error;
+    if (!materialize_normals(archive, object, normal_error)) {
+        object.normals.clear();
+        std::fill(object.triangle_normal_indices.begin(),
+                  object.triangle_normal_indices.end(), UINT32_MAX);
     }
     return true;
 }
@@ -684,6 +808,12 @@ bool HostScene::load(const Archive& archive, std::string_view symbol)
                     // skip this object until its layout is implemented.
                     object.positions.clear();
                     object.triangle_indices.clear();
+                }
+                std::string normal_error;
+                if (!materialize_normals(archive, object, normal_error)) {
+                    object.normals.clear();
+                    std::fill(object.triangle_normal_indices.begin(),
+                              object.triangle_normal_indices.end(), UINT32_MAX);
                 }
             }
             const int32_t object_index =

@@ -66,7 +66,11 @@ struct HostDrawObject {
     // Position-array indices arranged as triangles.  These remain indices into
     // the HSD position array until the host GPU upload step.
     std::vector<uint32_t> triangle_position_indices;
+    // Normal-array indices follow the triangle position stream one-for-one.
+    // UINT32_MAX denotes a primitive without an indexed normal attribute.
+    std::vector<uint32_t> triangle_normal_indices;
     std::vector<std::array<float, 3>> positions;
+    std::vector<std::array<float, 3>> normals;
     std::vector<uint32_t> triangle_indices;
     std::vector<HostVertexDescriptor> vertex_descriptors;
     int32_t next = -1;
