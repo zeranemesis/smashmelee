@@ -370,3 +370,88 @@ MELEE_TEST(Scene, ReportsTheOffendingPrimitiveOnAnUnsupportedStream)
                                   std::to_string(primitive)) == 0);
     CHECK(scene.last_error().find("[a=9 t=1") != std::string::npos);
 }
+
+MELEE_TEST(Scene, DecodesAPaletteBackedTexture)
+{
+    // GX_TF_C8 indexes an RGB5A3 palette; both the index image and the colour
+    // table have to be copied into host memory, because Aurora may hold the
+    // pointer until draw submission.
+    DatBuilder builder;
+    const uint32_t material = fixtures::add_material(
+        builder, { 255, 255, 255, 255 }, 1.0F, 0.0F);
+    const uint32_t texture = fixtures::add_paletted_texture(
+        builder, 8, 8, 0x9, 0x1, 256);
+    const uint32_t material_object =
+        fixtures::add_material_object(builder, texture, material);
+    const uint32_t draw_object =
+        add_triangle_draw_object(builder, material_object);
+    const uint32_t root = fixtures::add_joint(builder);
+    fixtures::set_joint_draw_object(builder, root, draw_object);
+    builder.symbol("model_joint", root);
+
+    Archive archive;
+    REQUIRE(archive.parse(builder.build()));
+    HostScene scene;
+    REQUIRE(scene.load_joint(archive, "model_joint"));
+
+    REQUIRE(scene.textures().size() == 1);
+    const auto& host_texture = scene.textures().front();
+    CHECK_EQ(host_texture.format, 0x9U);
+    CHECK_EQ(host_texture.palette_format, 0x1U);
+    CHECK_EQ(host_texture.palette_entries, 256);
+    CHECK_EQ(host_texture.palette_data.size(), 512U);
+    // C8 stores 8x4 tiles at 32 bytes each, so an 8x8 image is two tiles.
+    CHECK_EQ(host_texture.image_data.size(), 64U);
+    REQUIRE(scene.materials().size() == 1);
+    CHECK_EQ(scene.materials().front().texture_index, 0);
+}
+
+MELEE_TEST(Scene, RejectsAPaletteBackedTextureWithNoPalette)
+{
+    DatBuilder builder;
+    const uint32_t material = fixtures::add_material(
+        builder, { 255, 255, 255, 255 }, 1.0F, 0.0F);
+    // add_texture leaves the TlutDesc pointer null, which a C8 image cannot
+    // be decoded without.
+    const uint32_t texture = fixtures::add_texture(builder, 8, 8, 0x9);
+    const uint32_t material_object =
+        fixtures::add_material_object(builder, texture, material);
+    const uint32_t draw_object =
+        add_triangle_draw_object(builder, material_object);
+    const uint32_t root = fixtures::add_joint(builder);
+    fixtures::set_joint_draw_object(builder, root, draw_object);
+    builder.symbol("model_joint", root);
+
+    Archive archive;
+    REQUIRE(archive.parse(builder.build()));
+    HostScene scene;
+    // An unusable texture leaves the material without one; it must not
+    // discard the geometry.
+    REQUIRE(scene.load_joint(archive, "model_joint"));
+    CHECK(scene.textures().empty());
+    REQUIRE(scene.materials().size() == 1);
+    CHECK_EQ(scene.materials().front().texture_index, -1);
+    REQUIRE(scene.draw_objects().size() == 1);
+    CHECK(scene.draw_objects().front().position_stream_decoded);
+}
+
+MELEE_TEST(Scene, RejectsAnUnsupportedTextureFormat)
+{
+    DatBuilder builder;
+    const uint32_t material = fixtures::add_material(
+        builder, { 255, 255, 255, 255 }, 1.0F, 0.0F);
+    const uint32_t texture = fixtures::add_texture(builder, 8, 8, 0xD);
+    const uint32_t material_object =
+        fixtures::add_material_object(builder, texture, material);
+    const uint32_t draw_object =
+        add_triangle_draw_object(builder, material_object);
+    const uint32_t root = fixtures::add_joint(builder);
+    fixtures::set_joint_draw_object(builder, root, draw_object);
+    builder.symbol("model_joint", root);
+
+    Archive archive;
+    REQUIRE(archive.parse(builder.build()));
+    HostScene scene;
+    REQUIRE(scene.load_joint(archive, "model_joint"));
+    CHECK(scene.textures().empty());
+}

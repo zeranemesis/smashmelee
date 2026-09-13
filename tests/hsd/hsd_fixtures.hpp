@@ -88,6 +88,12 @@ uint32_t add_camera(DatBuilder& builder, std::array<float, 3> eye,
 uint32_t add_texture(DatBuilder& builder, uint16_t width, uint16_t height,
                      uint32_t format);
 
+// HSD_TObjDesc for a palette-backed format (C4/C8/C14X2), including the
+// HSD_TlutDesc its image indexes into.
+uint32_t add_paletted_texture(DatBuilder& builder, uint16_t width,
+                              uint16_t height, uint32_t format,
+                              uint32_t palette_format, uint16_t entries);
+
 // SceneDesc { models, cameras, lights, fogs } with one DynamicModelDesc per
 // root joint and an optional single-camera array.
 uint32_t add_scene(DatBuilder& builder, const std::vector<uint32_t>& roots,

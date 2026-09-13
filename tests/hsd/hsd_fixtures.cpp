@@ -197,6 +197,40 @@ uint32_t add_texture(DatBuilder& builder, uint16_t width, uint16_t height,
     return texture;
 }
 
+uint32_t add_paletted_texture(DatBuilder& builder, uint16_t width,
+                              uint16_t height, uint32_t format,
+                              uint32_t palette_format, uint16_t entries)
+{
+    // C4 packs 8x8 tiles, C8 8x4, C14X2 4x4; all of them at 32 bytes a tile.
+    const uint32_t tile_width = format == 0x8 ? 8U : format == 0x9 ? 8U : 4U;
+    const uint32_t tile_height = format == 0x8 ? 8U : 4U;
+    const uint32_t tiles = ((width + tile_width - 1) / tile_width) *
+        ((height + tile_height - 1) / tile_height);
+    const uint32_t indices = builder.allocate(tiles * 32U, 32);
+
+    const uint32_t image = builder.allocate(kImageSize);
+    builder.pointer(image + 0x00, indices);
+    builder.u16(image + 0x04, width);
+    builder.u16(image + 0x06, height);
+    builder.u32(image + 0x08, format);
+    builder.u32(image + 0x0C, 0);
+    builder.f32(image + 0x14, 0.0F);
+
+    const uint32_t entries_bytes = static_cast<uint32_t>(entries) * 2U;
+    const uint32_t colors = builder.allocate(entries_bytes, 32);
+    const uint32_t palette = builder.allocate(kPaletteSize);
+    builder.pointer(palette + 0x00, colors);
+    builder.u32(palette + 0x04, palette_format);
+    builder.u16(palette + 0x0C, entries);
+
+    const uint32_t texture = builder.allocate(kTextureSize);
+    builder.u32(texture + 0x34, 0);
+    builder.u32(texture + 0x38, 0);
+    builder.pointer(texture + 0x4C, image);
+    builder.pointer(texture + 0x50, palette);
+    return texture;
+}
+
 uint32_t add_scene(DatBuilder& builder, const std::vector<uint32_t>& roots,
                    uint32_t camera)
 {
