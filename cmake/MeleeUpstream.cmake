@@ -71,6 +71,11 @@ function(melee_upstream_shim result)
 #define FALSE 0
 #endif
 
+/* A second route to the prelude, for translation units that reach this header
+   before they need the SDK spellings.  It is force-included as well; the
+   include guard makes both harmless. */
+#include <melee/port/dolphin_compat.h>
+
 #endif /* MELEE_UPSTREAM_PLATFORM_SHIM_H */
 ")
     set(${result} ${shim} PARENT_SCOPE)
@@ -98,16 +103,18 @@ function(melee_upstream_configure target)
     target_compile_definitions(${target} PRIVATE
             TARGET_PC NDEBUG=1 VERSION_NTSC102)
 
-    # Upstream's C is force-fed the prelude; the port's own C++ includes it
-    # deliberately, through tests/hsd/hsd_api.hpp.
+    # Upstream's C is force-fed the prelude.  On MSVC the flags are not
+    # gated by language: the Visual Studio generator does not reliably honour
+    # COMPILE_LANGUAGE in target_compile_options, and a unit that needed the
+    # prelude (spline.c, for Vec3) compiled without it while the units that
+    # did not need it passed.  The prelude is C-compatible and carries an
+    # include guard, so applying it to the C++ sources as well is harmless --
+    # they include it explicitly anyway.
     if (MSVC)
         target_compile_options(${target} PRIVATE
-                $<$<COMPILE_LANGUAGE:C>:/FI${prelude}>
+                /FI${prelude}
                 # Upstream is written for a compiler that accepts these.
-                $<$<COMPILE_LANGUAGE:C>:/wd4013>
-                $<$<COMPILE_LANGUAGE:C>:/wd4133>
-                $<$<COMPILE_LANGUAGE:C>:/wd4244>
-                $<$<COMPILE_LANGUAGE:C>:/wd4267>)
+                /wd4013 /wd4133 /wd4244 /wd4267)
     else ()
         target_compile_options(${target} PRIVATE
                 $<$<COMPILE_LANGUAGE:C>:-include$<SEMICOLON>${prelude}>
