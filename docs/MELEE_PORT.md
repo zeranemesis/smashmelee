@@ -73,6 +73,9 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
 - [x] instantiate the five original `MenMainCursor_Top` hierarchies, attach
       them to the animated option joints, and reproduce the joint selection
       poses and visibility rules from `mn_8022B3A0`;
+- [x] reproduce the native `MENU_KIND_VS` transition from `mn_8022DB10`,
+      including the original VS hover/cursor animation ranges, five choices,
+      and the B-button return path from `mn_8022D594`;
 - [x] keep HSD AObj/FObj allocators process-global while multiple animation
       players are alive; this is covered by a two-player materialization
       regression and a 90-second MSVC AddressSanitizer menu smoke test;

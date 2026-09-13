@@ -33,13 +33,21 @@ aurora::Module MeleeBootstrapLog("meleeboard::bootstrap");
 constexpr std::array<const char*, 5> kMainMenuNames = {
     "1-P Mode", "VS. Mode", "Trophies", "Options", "Data",
 };
+constexpr std::array<const char*, 5> kVsMenuNames = {
+    "Melee", "Tournament Melee", "Special Melee", "Rules", "Name Entry",
+};
+
+enum class MenuPage : uint8_t {
+    Main,
+    Versus,
+};
 
 struct MainMenuInput {
     uint16_t previous_buttons = 0;
     int8_t previous_stick_direction = 0;
     uint8_t selection = 0;
 
-    bool poll(bool& confirm)
+    bool poll(bool& confirm, bool& back)
     {
         PADStatus pads[PAD_MAX_CONTROLLERS]{};
         PADRead(pads);
@@ -57,6 +65,7 @@ struct MainMenuInput {
         previous_buttons = buttons;
         previous_stick_direction = stick_direction;
         confirm = (pressed & (PAD_BUTTON_A | PAD_BUTTON_START)) != 0;
+        back = (pressed & PAD_BUTTON_B) != 0;
 
         int direction = 0;
         if ((pressed & PAD_BUTTON_UP) != 0 ||
@@ -305,16 +314,19 @@ extern "C" int game_main(void)
     auto previous_tick = Clock::now();
     std::chrono::duration<double> simulation_accumulator = kSimulationStep;
     MainMenuInput menu_input;
+    MenuPage menu_page = MenuPage::Main;
     uint32_t hover_ticks = 0;
     PADInit();
-    const auto configure_cursors = [&](uint8_t selected) {
+    const auto configure_cursors = [&](uint8_t selected,
+                                       float cursor_frame_base) {
         if (!menu_cursors_ready) return;
         for (uint32_t option = 0; option < menu_cursor_players.size(); ++option) {
             auto& player = menu_cursor_players[option];
             const bool hovered = option == selected;
             player.request_joint(2, hovered ? 50.0F : 0.0F);
             player.request_subtree(3, hovered ? 1.0F : 0.0F);
-            player.request_joint(3, static_cast<float>(option * 2));
+            player.request_joint(
+                3, cursor_frame_base + static_cast<float>(option * 2));
             player.request_subtree(4, hovered ? 50.0F : 49.0F);
             player.request_joint(9, 0.0F);
             player.set_subtree_hidden(9, !hovered);
@@ -326,7 +338,13 @@ extern "C" int game_main(void)
             player.tick();
         }
     };
-    configure_cursors(menu_input.selection);
+    const auto apply_menu_selection = [&](float hover_start,
+                                          float cursor_frame_base) {
+        hover_ticks = 0;
+        menu_content_player.request_subtree(14, hover_start);
+        configure_cursors(menu_input.selection, cursor_frame_base);
+    };
+    configure_cursors(menu_input.selection, 0.0F);
 
     while (PartyBoard_IsRunning) {
         const AuroraEvent* event = aurora_update();
@@ -364,28 +382,57 @@ extern "C" int game_main(void)
             }
             if (menu_content_ready) {
                 bool confirm = false;
-                if (menu_input.poll(confirm)) {
-                    hover_ticks = 0;
-                    const float start_frame =
+                bool back = false;
+                const auto& names = menu_page == MenuPage::Main ?
+                    kMainMenuNames : kVsMenuNames;
+                const float hover_base = menu_page == MenuPage::Main ?
+                    0.0F : 700.0F;
+                const float cursor_frame_base = menu_page == MenuPage::Main ?
+                    0.0F : 40.0F;
+                if (menu_input.poll(confirm, back)) {
+                    const float start_frame = hover_base +
                         static_cast<float>(menu_input.selection) * 50.0F;
-                    menu_content_player.request_subtree(14, start_frame);
-                    configure_cursors(menu_input.selection);
+                    apply_menu_selection(start_frame, cursor_frame_base);
                     const std::string title = std::string("Melee native port - ") +
-                        kMainMenuNames[menu_input.selection];
+                        names[menu_input.selection];
                     VISetWindowTitle(title.c_str());
                     MeleeBootstrapLog.info("Main-menu selection: {} ({})",
-                                           kMainMenuNames[menu_input.selection],
+                                           names[menu_input.selection],
                                            menu_input.selection);
                 }
                 if (confirm) {
-                    MeleeBootstrapLog.info(
-                        "Main-menu confirm requested for {}; scene transition is the next native-port boundary",
-                        kMainMenuNames[menu_input.selection]);
+                    if (menu_page == MenuPage::Main &&
+                        menu_input.selection == 1) {
+                        // mn_8022DB10 enters MENU_KIND_VS with selection zero.
+                        menu_page = MenuPage::Versus;
+                        menu_input.selection = 0;
+                        apply_menu_selection(700.0F, 40.0F);
+                        VISetWindowTitle("Melee native port - Melee");
+                        MeleeBootstrapLog.info(
+                            "Entered native VS submenu (MENU_KIND_VS)");
+                    } else if (menu_page == MenuPage::Versus &&
+                               menu_input.selection == 0) {
+                        MeleeBootstrapLog.info(
+                            "VS Melee confirmed; GM_VS character select is the next native scene boundary");
+                    } else {
+                        MeleeBootstrapLog.info(
+                            "Menu confirm requested for {}; native transition not ported yet",
+                            names[menu_input.selection]);
+                    }
+                } else if (back && menu_page == MenuPage::Versus) {
+                    // mn_8022D594 returns to the main page with VS selected.
+                    menu_page = MenuPage::Main;
+                    menu_input.selection = 1;
+                    apply_menu_selection(50.0F, 0.0F);
+                    VISetWindowTitle("Melee native port - VS. Mode");
+                    MeleeBootstrapLog.info("Returned to native main menu");
                 }
                 ++hover_ticks;
                 if (hover_ticks == 50 ||
                     (hover_ticks > 50 && (hover_ticks - 50) % 30 == 0)) {
-                    const float loop_frame =
+                    const float active_hover_base =
+                        menu_page == MenuPage::Main ? 0.0F : 700.0F;
+                    const float loop_frame = active_hover_base +
                         static_cast<float>(menu_input.selection) * 50.0F + 20.0F;
                     menu_content_player.request_subtree(14, loop_frame);
                 }
