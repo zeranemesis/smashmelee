@@ -16,6 +16,7 @@
 #include <aurora/lib/logging.hpp>
 #include <dolphin/pad.h>
 #include <dolphin/vi.h>
+#include <SDL3/SDL_scancode.h>
 #include <port/main.h>
 #include <port/settings.h>
 
@@ -45,8 +46,24 @@ enum class MenuPage : uint8_t {
 
 struct MainMenuInput {
     uint16_t previous_buttons = 0;
+    uint16_t queued_buttons = 0;
     int8_t previous_stick_direction = 0;
     uint8_t selection = 0;
+
+    void handle_event(const SDL_Event& event)
+    {
+        if (event.type != SDL_EVENT_KEY_DOWN || event.key.repeat) return;
+        switch (event.key.scancode) {
+        case SDL_SCANCODE_UP: queued_buttons |= PAD_BUTTON_UP; break;
+        case SDL_SCANCODE_DOWN: queued_buttons |= PAD_BUTTON_DOWN; break;
+        case SDL_SCANCODE_LEFT: queued_buttons |= PAD_BUTTON_LEFT; break;
+        case SDL_SCANCODE_RIGHT: queued_buttons |= PAD_BUTTON_RIGHT; break;
+        case SDL_SCANCODE_Z: queued_buttons |= PAD_BUTTON_A; break;
+        case SDL_SCANCODE_X: queued_buttons |= PAD_BUTTON_B; break;
+        case SDL_SCANCODE_RETURN: queued_buttons |= PAD_BUTTON_START; break;
+        default: break;
+        }
+    }
 
     bool poll(bool& confirm, bool& back)
     {
@@ -60,6 +77,8 @@ struct MainMenuInput {
             if (pad.stickY >= 40) stick_direction = 1;
             else if (pad.stickY <= -40) stick_direction = -1;
         }
+        buttons |= queued_buttons;
+        queued_buttons = 0;
         const uint16_t pressed = buttons & ~previous_buttons;
         const bool stick_pressed = stick_direction != 0 &&
             stick_direction != previous_stick_direction;
@@ -80,6 +99,53 @@ struct MainMenuInput {
         return true;
     }
 };
+
+void ensure_fallback_keyboard_controls()
+{
+    // PAD loads persisted keyboard state lazily on its first read.  Force that
+    // load before deciding whether the user has configured anything, so the
+    // fallback never overwrites an existing keyboard or controller setup.
+    PADStatus initial_status[PAD_MAX_CONTROLLERS]{};
+    PADRead(initial_status);
+    uint32_t binding_count = 0;
+    if (PADGetIndexForPort(PAD_CHAN0) >= 0 ||
+        PADGetKeyButtonBindings(PAD_CHAN0, &binding_count) != nullptr) {
+        return;
+    }
+
+    PADKeyButtonBinding buttons[PAD_BUTTON_COUNT] = {
+        { SDL_SCANCODE_Z, PAD_BUTTON_A },
+        { SDL_SCANCODE_X, PAD_BUTTON_B },
+        { SDL_SCANCODE_C, PAD_BUTTON_X },
+        { SDL_SCANCODE_V, PAD_BUTTON_Y },
+        { SDL_SCANCODE_RETURN, PAD_BUTTON_START },
+        { SDL_SCANCODE_Q, PAD_TRIGGER_Z },
+        { SDL_SCANCODE_LSHIFT, PAD_TRIGGER_L },
+        { SDL_SCANCODE_RSHIFT, PAD_TRIGGER_R },
+        { SDL_SCANCODE_UP, PAD_BUTTON_UP },
+        { SDL_SCANCODE_DOWN, PAD_BUTTON_DOWN },
+        { SDL_SCANCODE_LEFT, PAD_BUTTON_LEFT },
+        { SDL_SCANCODE_RIGHT, PAD_BUTTON_RIGHT },
+    };
+    PADKeyAxisBinding axes[PAD_AXIS_COUNT] = {
+        { SDL_SCANCODE_D, PAD_AXIS_LEFT_X_POS, 0 },
+        { SDL_SCANCODE_A, PAD_AXIS_LEFT_X_NEG, 0 },
+        { SDL_SCANCODE_W, PAD_AXIS_LEFT_Y_POS, 0 },
+        { SDL_SCANCODE_S, PAD_AXIS_LEFT_Y_NEG, 0 },
+        { SDL_SCANCODE_L, PAD_AXIS_RIGHT_X_POS, 0 },
+        { SDL_SCANCODE_J, PAD_AXIS_RIGHT_X_NEG, 0 },
+        { SDL_SCANCODE_I, PAD_AXIS_RIGHT_Y_POS, 0 },
+        { SDL_SCANCODE_K, PAD_AXIS_RIGHT_Y_NEG, 0 },
+        { SDL_SCANCODE_E, PAD_AXIS_TRIGGER_L, 0 },
+        { SDL_SCANCODE_R, PAD_AXIS_TRIGGER_R, 0 },
+    };
+    if (PADSetKeyButtonBindings(PAD_CHAN0, buttons) &&
+        PADSetKeyAxisBindings(PAD_CHAN0, axes)) {
+        PADSetKeyboardActive(PAD_CHAN0, TRUE);
+        MeleeBootstrapLog.info(
+            "Enabled fallback keyboard controls (arrows/Z/X/Enter, WASD stick)");
+    }
+}
 
 } // namespace
 
@@ -388,6 +454,7 @@ extern "C" int game_main(void)
     MenuPage menu_page = MenuPage::Main;
     uint32_t hover_ticks = 0;
     PADInit();
+    ensure_fallback_keyboard_controls();
     const auto configure_cursors = [&](uint8_t selected,
                                        float cursor_frame_base) {
         if (!menu_cursors_ready) return;
@@ -425,6 +492,7 @@ extern "C" int game_main(void)
                 break;
             }
             if (event->type == AURORA_SDL_EVENT) {
+                menu_input.handle_event(event->sdl);
                 partyboard::ui::handle_event(event->sdl);
             }
             ++event;

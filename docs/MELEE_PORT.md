@@ -70,6 +70,10 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       the original layer containing the five top-level menu choices;
 - [x] read Aurora PAD/keyboard state at 60 Hz and drive the top-level hover
       animation ranges from `mn_803EB3FC` with D-pad or analog-stick input;
+- [x] provide non-persistent fallback keyboard controls when port 0 has neither
+      a connected controller nor saved keyboard bindings (arrows and Z/X for
+      menu navigation; WASD and the remaining GameCube controls for later
+      gameplay bring-up), without overriding user configuration;
 - [x] instantiate the five original `MenMainCursor_Top` hierarchies, attach
       them to the animated option joints, and reproduce the joint selection
       poses and visibility rules from `mn_8022B3A0`;
