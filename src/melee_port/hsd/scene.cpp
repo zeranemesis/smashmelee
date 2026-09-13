@@ -927,6 +927,11 @@ bool HostScene::load_joint(const Archive& archive, std::string_view symbol)
     return load_internal(archive, symbol, true);
 }
 
+bool HostScene::load_joint_at(const Archive& archive, uint32_t root_offset)
+{
+    return load_internal(archive, {}, true, root_offset);
+}
+
 bool HostScene::load_camera(const Archive& archive, std::string_view symbol)
 {
     const auto description = archive.public_symbol_offset(symbol);
@@ -934,8 +939,14 @@ bool HostScene::load_camera(const Archive& archive, std::string_view symbol)
         last_error_ = "could not resolve HSD camera symbol";
         return false;
     }
+    return load_camera_at(archive, *description);
+}
+
+bool HostScene::load_camera_at(const Archive& archive,
+                               uint32_t description_offset)
+{
     HostCamera camera{};
-    if (!read_camera(archive, *description, camera)) {
+    if (!read_camera(archive, description_offset, camera)) {
         last_error_ = "could not decode HSD camera descriptor";
         return false;
     }
@@ -946,7 +957,7 @@ bool HostScene::load_camera(const Archive& archive, std::string_view symbol)
 }
 
 bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
-                              bool direct_joint)
+                              bool direct_joint, uint32_t direct_root)
 {
     joints_.clear();
     cameras_.clear();
@@ -957,11 +968,18 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
     last_error_ = "could not resolve HSD scene roots";
 
     if (direct_joint) {
-        const auto root = archive.public_symbol_offset(symbol);
-        if (!root.has_value()) {
-            return false;
+        if (direct_root != UINT32_MAX) {
+            if (!archive.contains_data_range(direct_root, 0x38)) {
+                return false;
+            }
+            model_roots_.push_back(direct_root);
+        } else {
+            const auto root = archive.public_symbol_offset(symbol);
+            if (!root.has_value()) {
+                return false;
+            }
+            model_roots_.push_back(*root);
         }
-        model_roots_.push_back(*root);
     } else {
         const auto scene = archive.scene_roots(symbol);
         const auto model_count = archive.scene_model_count(symbol);

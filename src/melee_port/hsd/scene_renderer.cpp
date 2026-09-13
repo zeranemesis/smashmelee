@@ -11,7 +11,6 @@
 #include <array>
 #include <cmath>
 #include <limits>
-#include <unordered_map>
 #include <vector>
 
 namespace meleeboard::hsd {
@@ -158,10 +157,6 @@ void apply_camera_viewport(const HostCamera& camera)
 bool world_at_preorder(const HostScene& scene, uint32_t target, Matrix& result)
 {
     const auto& joints = scene.joints();
-    std::unordered_map<uint32_t, uint32_t> joint_by_source;
-    for (uint32_t index = 0; index < joints.size(); ++index) {
-        joint_by_source.emplace(joints[index].source_offset, index);
-    }
     std::vector<bool> visited(joints.size(), false);
     uint32_t traversal = 0;
     const auto visit = [&](auto&& self, int32_t index,
@@ -178,9 +173,8 @@ bool world_at_preorder(const HostScene& scene, uint32_t target, Matrix& result)
         return self(self, joints[index].sibling, parent);
     };
     for (uint32_t root : scene.model_roots()) {
-        const auto found = joint_by_source.find(root);
-        if (found != joint_by_source.end() &&
-            visit(visit, static_cast<int32_t>(found->second), identity())) {
+        if (root < joints.size() &&
+            visit(visit, static_cast<int32_t>(root), identity())) {
             return true;
         }
     }
@@ -213,11 +207,6 @@ void MeleeSceneRenderer::render()
 {
     const auto& joints = scene_.joints();
     const auto& objects = scene_.draw_objects();
-    std::unordered_map<uint32_t, uint32_t> joint_by_source;
-    joint_by_source.reserve(joints.size());
-    for (uint32_t index = 0; index < joints.size(); ++index) {
-        joint_by_source.emplace(joints[index].source_offset, index);
-    }
 
     Matrix root_parent = identity();
     if (parent_scene_ != nullptr) {
@@ -248,9 +237,8 @@ void MeleeSceneRenderer::render()
         self(self, joints[joint_index].sibling, parent);
     };
     for (uint32_t root : scene_.model_roots()) {
-        const auto found = joint_by_source.find(root);
-        if (found != joint_by_source.end()) {
-            visit(visit, static_cast<int32_t>(found->second), root_parent);
+        if (root < joints.size()) {
+            visit(visit, static_cast<int32_t>(root), root_parent);
         }
     }
 
@@ -259,7 +247,8 @@ void MeleeSceneRenderer::render()
     std::array<float, 3> minimum = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
     std::array<float, 3> maximum = { std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest() };
     bool has_geometry = false;
-    for (uint32_t object_index = 0; object_index < objects.size(); ++object_index) {
+    for (uint32_t object_index = 0; object_index < objects.size();
+         ++object_index) {
         if (!drawable(objects[object_index]) || object_owner[object_index] < 0) {
             continue;
         }
@@ -350,7 +339,6 @@ void MeleeSceneRenderer::render()
     GXSetTevOp(GX_TEVSTAGE0, GX_REPLACE);
     GXSetCullMode(GX_CULL_NONE);
     GXSetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
-
     for (uint32_t object_index = 0; object_index < objects.size(); ++object_index) {
         const HostDrawObject& object = objects[object_index];
         if (!drawable(object) || object_owner[object_index] < 0) {
@@ -421,6 +409,7 @@ void MeleeSceneRenderer::render()
             start += count;
         }
     }
+
 }
 
 uint32_t MeleeSceneRenderer::drawable_object_count() const { return drawable_object_count_; }

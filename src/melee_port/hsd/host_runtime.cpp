@@ -125,6 +125,19 @@ bool verify_animation_materialization()
         animation.joints().size() != 1) {
         return false;
     }
+    // CSS and other Melee data tables point at anonymous HSD trees rather
+    // than exporting every tree by name. Exercise the same relocated-offset
+    // entry point used by MnSelectChrDataTable, including rejection of an
+    // out-of-range root.
+    const auto animation_offset = archive.public_symbol_offset("testAnim");
+    HostAnimation offset_animation;
+    HostAnimation invalid_animation;
+    if (!animation_offset.has_value() ||
+        !offset_animation.load_at(archive, *animation_offset) ||
+        offset_animation.joints().size() != animation.joints().size() ||
+        invalid_animation.load_at(archive, archive.data_size())) {
+        return false;
+    }
     const HostAnimationJoint& joint = animation.joints().front();
     if (!(joint.has_object && joint.object.flags == AOBJ_LOOP &&
         joint.object.end_frame == 20.0F && joint.object.channels.size() == 1 &&

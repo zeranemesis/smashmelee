@@ -40,6 +40,7 @@ constexpr std::array<const char*, 5> kVsMenuNames = {
 enum class MenuPage : uint8_t {
     Main,
     Versus,
+    CharacterSelect,
 };
 
 struct MainMenuInput {
@@ -121,6 +122,8 @@ extern "C" int game_main(void)
     meleeboard::hsd::HostAnimation menu_content_animation;
     std::array<meleeboard::hsd::HostScene, 5> menu_cursors;
     meleeboard::hsd::HostAnimation menu_cursor_animation;
+    meleeboard::hsd::HostScene character_select_model;
+    meleeboard::hsd::HostAnimation character_select_animation;
     bool menu_ready = false;
     bool menu_panel_ready = false;
     bool menu_content_ready = false;
@@ -191,6 +194,47 @@ extern "C" int game_main(void)
                 "Could not materialize MnMaAll.dat's MenMainBack animation");
         }
     }
+    bool character_select_ready = false;
+    std::vector<unsigned char> character_select_bytes;
+    if (meleeboard::disc::read_file("MnSlChr.usd", character_select_bytes)) {
+        meleeboard::hsd::Archive character_select_archive;
+        if (character_select_archive.parse(std::move(character_select_bytes))) {
+            // MnSelectChrDataTable starts with CSSSceneModels (four pointers),
+            // followed by CSSAnimSet entries (four pointers each).  VS uses
+            // ANIM[3], exactly as mnCharSel_802640A0 does upstream.
+            const auto table = character_select_archive.public_symbol_offset(
+                "MnSelectChrDataTable");
+            constexpr uint32_t kSceneModelsSize = 0x10;
+            constexpr uint32_t kAnimSetSize = 0x10;
+            constexpr uint32_t kVersusAnimSet = 3;
+            if (table.has_value()) {
+                const uint32_t animation_set = *table + kSceneModelsSize +
+                    kVersusAnimSet * kAnimSetSize;
+                const auto camera = character_select_archive.data_pointer(*table);
+                const auto joint =
+                    character_select_archive.data_pointer(animation_set);
+                const auto animation =
+                    character_select_archive.data_pointer(animation_set + 0x04);
+                character_select_ready = camera.has_value() && joint.has_value() &&
+                    animation.has_value() &&
+                    character_select_model.load_joint_at(
+                        character_select_archive, *joint) &&
+                    character_select_model.load_camera_at(
+                        character_select_archive, *camera) &&
+                    character_select_animation.load_at(
+                        character_select_archive, *animation) &&
+                    character_select_model.joints().size() ==
+                        character_select_animation.joints().size();
+            }
+        }
+    }
+    MeleeBootstrapLog.info(
+        "MnSlChr.usd VS character-select root: {} animation joints, {} model joints, {} draw objects ({})",
+        character_select_animation.joints().size(),
+        character_select_model.joints().size(),
+        character_select_model.draw_objects().size(),
+        character_select_ready ? "model/camera decoded" :
+                                 character_select_model.last_error());
     const auto stand_scene = archive.scene_roots("standScene");
     const auto model_count = archive.scene_model_count("standScene");
     const auto joint_count = archive.scene_joint_count("standScene");
@@ -215,6 +259,7 @@ extern "C" int game_main(void)
     meleeboard::hsd::HostAnimationPlayer menu_panel_player;
     meleeboard::hsd::HostAnimationPlayer menu_content_player;
     std::array<meleeboard::hsd::HostAnimationPlayer, 5> menu_cursor_players;
+    meleeboard::hsd::HostAnimationPlayer character_select_player;
     if (menu_ready) {
         std::vector<uint32_t> mapping(menu_animation.joints().size());
         for (uint32_t index = 0; index < mapping.size(); ++index) {
@@ -259,6 +304,20 @@ extern "C" int game_main(void)
                     menu_cursor_animation, menu_cursors[option].joints(), mapping);
         }
     }
+    if (character_select_ready) {
+        std::vector<uint32_t> mapping(character_select_animation.joints().size());
+        for (uint32_t index = 0; index < mapping.size(); ++index) {
+            mapping[index] = index;
+        }
+        character_select_ready = character_select_player.attach(
+            character_select_animation, character_select_model.joints(), mapping);
+        if (character_select_ready) {
+            character_select_player.request(0.0F);
+            character_select_player.tick();
+        }
+        MeleeBootstrapLog.debug("MnSlChr VS animation attach: {}",
+                                character_select_ready);
+    }
     MeleeBootstrapLog.info(
         "Mounted {}; materialized standScene with {} models, {} joints, {} draw objects, {} materials, and {} direct textures (M={:#x} C={:#x} L={:#x} F={:#x}); entering bootstrap loop",
         meleeboard::disc::mounted_path(), host_scene.model_roots().size(),
@@ -272,6 +331,8 @@ extern "C" int game_main(void)
     std::unique_ptr<meleeboard::hsd::MeleeSceneRenderer> content_renderer;
     std::array<std::unique_ptr<meleeboard::hsd::MeleeSceneRenderer>, 5>
         cursor_renderers;
+    std::unique_ptr<meleeboard::hsd::MeleeSceneRenderer>
+        character_select_renderer;
     if (menu_ready && menu_panel_ready) {
         panel_renderer =
             std::make_unique<meleeboard::hsd::MeleeSceneRenderer>(menu_panel);
@@ -296,6 +357,16 @@ extern "C" int game_main(void)
             "MenMainCursor renderers: 5 instances, {} drawable objects each, {} triangles each",
             cursor_renderers.front()->drawable_object_count(),
             cursor_renderers.front()->submitted_triangle_count());
+    }
+    if (character_select_ready) {
+        character_select_renderer =
+            std::make_unique<meleeboard::hsd::MeleeSceneRenderer>(
+                character_select_model);
+        MeleeBootstrapLog.info(
+            "MnSlChr VS renderer: {} drawable objects, {} skipped objects, {} triangles",
+            character_select_renderer->drawable_object_count(),
+            character_select_renderer->skipped_object_count(),
+            character_select_renderer->submitted_triangle_count());
     }
     MeleeBootstrapLog.info(
         "{} renderer: {} drawable objects, {} skipped objects, {} triangles",
@@ -374,69 +445,93 @@ extern "C" int game_main(void)
         while (simulation_accumulator >= kSimulationStep &&
                steps < kMaxCatchUpSteps) {
             meleeboard::hsd::tick_host_runtime();
-            if (menu_ready) {
+            if (menu_ready && menu_page != MenuPage::CharacterSelect) {
                 menu_player.tick();
             }
-            if (menu_panel_ready) {
+            if (menu_panel_ready && menu_page != MenuPage::CharacterSelect) {
                 menu_panel_player.tick();
             }
             if (menu_content_ready) {
                 bool confirm = false;
                 bool back = false;
-                const auto& names = menu_page == MenuPage::Main ?
-                    kMainMenuNames : kVsMenuNames;
-                const float hover_base = menu_page == MenuPage::Main ?
-                    0.0F : 700.0F;
-                const float cursor_frame_base = menu_page == MenuPage::Main ?
-                    0.0F : 40.0F;
-                if (menu_input.poll(confirm, back)) {
-                    const float start_frame = hover_base +
-                        static_cast<float>(menu_input.selection) * 50.0F;
-                    apply_menu_selection(start_frame, cursor_frame_base);
-                    const std::string title = std::string("Melee native port - ") +
-                        names[menu_input.selection];
-                    VISetWindowTitle(title.c_str());
-                    MeleeBootstrapLog.info("Main-menu selection: {} ({})",
-                                           names[menu_input.selection],
-                                           menu_input.selection);
-                }
-                if (confirm) {
-                    if (menu_page == MenuPage::Main &&
-                        menu_input.selection == 1) {
-                        // mn_8022DB10 enters MENU_KIND_VS with selection zero.
+                const bool moved = menu_input.poll(confirm, back);
+                if (menu_page == MenuPage::CharacterSelect) {
+                    if (back) {
                         menu_page = MenuPage::Versus;
                         menu_input.selection = 0;
                         apply_menu_selection(700.0F, 40.0F);
                         VISetWindowTitle("Melee native port - Melee");
                         MeleeBootstrapLog.info(
-                            "Entered native VS submenu (MENU_KIND_VS)");
-                    } else if (menu_page == MenuPage::Versus &&
-                               menu_input.selection == 0) {
-                        MeleeBootstrapLog.info(
-                            "VS Melee confirmed; GM_VS character select is the next native scene boundary");
-                    } else {
-                        MeleeBootstrapLog.info(
-                            "Menu confirm requested for {}; native transition not ported yet",
-                            names[menu_input.selection]);
+                            "Returned from native character select to VS submenu");
                     }
-                } else if (back && menu_page == MenuPage::Versus) {
-                    // mn_8022D594 returns to the main page with VS selected.
-                    menu_page = MenuPage::Main;
-                    menu_input.selection = 1;
-                    apply_menu_selection(50.0F, 0.0F);
-                    VISetWindowTitle("Melee native port - VS. Mode");
-                    MeleeBootstrapLog.info("Returned to native main menu");
+                } else {
+                    const auto& names = menu_page == MenuPage::Main ?
+                        kMainMenuNames : kVsMenuNames;
+                    const float hover_base = menu_page == MenuPage::Main ?
+                        0.0F : 700.0F;
+                    const float cursor_frame_base = menu_page == MenuPage::Main ?
+                        0.0F : 40.0F;
+                    if (moved) {
+                        const float start_frame = hover_base +
+                            static_cast<float>(menu_input.selection) * 50.0F;
+                        apply_menu_selection(start_frame, cursor_frame_base);
+                        const std::string title =
+                            std::string("Melee native port - ") +
+                            names[menu_input.selection];
+                        VISetWindowTitle(title.c_str());
+                        MeleeBootstrapLog.info("Menu selection: {} ({})",
+                                               names[menu_input.selection],
+                                               menu_input.selection);
+                    }
+                    if (confirm) {
+                        if (menu_page == MenuPage::Main &&
+                            menu_input.selection == 1) {
+                            // mn_8022DB10 enters MENU_KIND_VS with selection zero.
+                            menu_page = MenuPage::Versus;
+                            menu_input.selection = 0;
+                            apply_menu_selection(700.0F, 40.0F);
+                            VISetWindowTitle("Melee native port - Melee");
+                            MeleeBootstrapLog.info(
+                                "Entered native VS submenu (MENU_KIND_VS)");
+                        } else if (menu_page == MenuPage::Versus &&
+                                   menu_input.selection == 0) {
+                            if (character_select_ready) {
+                                menu_page = MenuPage::CharacterSelect;
+                                VISetWindowTitle(
+                                    "Melee native port - Character Select");
+                                MeleeBootstrapLog.info(
+                                    "Entered native GM_VS character-select visual");
+                            } else {
+                                MeleeBootstrapLog.warn(
+                                    "VS Melee confirmed, but MnSlChr.usd is not renderable");
+                            }
+                        } else {
+                            MeleeBootstrapLog.info(
+                                "Menu confirm requested for {}; native transition not ported yet",
+                                names[menu_input.selection]);
+                        }
+                    } else if (back && menu_page == MenuPage::Versus) {
+                        // mn_8022D594 returns to the main page with VS selected.
+                        menu_page = MenuPage::Main;
+                        menu_input.selection = 1;
+                        apply_menu_selection(50.0F, 0.0F);
+                        VISetWindowTitle("Melee native port - VS. Mode");
+                        MeleeBootstrapLog.info("Returned to native main menu");
+                    }
                 }
                 ++hover_ticks;
-                if (hover_ticks == 50 ||
-                    (hover_ticks > 50 && (hover_ticks - 50) % 30 == 0)) {
+                if (menu_page != MenuPage::CharacterSelect &&
+                    (hover_ticks == 50 ||
+                     (hover_ticks > 50 && (hover_ticks - 50) % 30 == 0))) {
                     const float active_hover_base =
                         menu_page == MenuPage::Main ? 0.0F : 700.0F;
                     const float loop_frame = active_hover_base +
                         static_cast<float>(menu_input.selection) * 50.0F + 20.0F;
                     menu_content_player.request_subtree(14, loop_frame);
                 }
-                menu_content_player.tick();
+                if (menu_page != MenuPage::CharacterSelect) {
+                    menu_content_player.tick();
+                }
             }
             simulation_accumulator -= kSimulationStep;
             ++steps;
@@ -446,15 +541,20 @@ extern "C" int game_main(void)
             // disconnected from current controller state.
             simulation_accumulator = std::chrono::duration<double>::zero();
         }
-        scene_renderer.render();
-        if (panel_renderer != nullptr) {
-            panel_renderer->render();
-        }
-        if (content_renderer != nullptr) {
-            content_renderer->render();
-        }
-        for (const auto& renderer : cursor_renderers) {
-            if (renderer != nullptr) renderer->render();
+        if (menu_page == MenuPage::CharacterSelect &&
+            character_select_renderer != nullptr) {
+            character_select_renderer->render();
+        } else {
+            scene_renderer.render();
+            if (panel_renderer != nullptr) {
+                panel_renderer->render();
+            }
+            if (content_renderer != nullptr) {
+                content_renderer->render();
+            }
+            for (const auto& renderer : cursor_renderers) {
+                if (renderer != nullptr) renderer->render();
+            }
         }
         aurora_end_frame();
     }

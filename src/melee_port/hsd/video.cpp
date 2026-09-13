@@ -22,6 +22,17 @@ bool initialize_video()
         gRenderMode.xfbHeight == 0) {
         return false;
     }
+
+    // Aurora's GX entry points record commands into the host FIFO created by
+    // GXInit.  The normal PartyBoard boot reaches this through HuSysInit, but
+    // the incremental Melee bootstrap deliberately does not enter that game
+    // initialization path.  Initializing GX here is therefore required even
+    // though Aurora already owns the native device and swapchain.  A null
+    // GameCube FIFO is intentional on the host; Aurora stores the command
+    // stream internally (and uses the same form in its GX regression tests).
+    if (GXInit(nullptr, 0) == nullptr) {
+        return false;
+    }
     gRenderedFrames = 0;
     gVideoInitialized = true;
     return true;

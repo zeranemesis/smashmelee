@@ -93,15 +93,30 @@ bool load_aobj(const Archive& archive, uint32_t offset, HostAnimationObject& obj
 
 bool HostAnimation::load(const Archive& archive, std::string_view symbol)
 {
-    joints_.clear();
-    last_error_.clear();
     const auto root = archive.public_symbol_offset(symbol);
     if (!root.has_value()) {
+        joints_.clear();
         last_error_ = "animation symbol is missing";
         return false;
     }
+    return load_internal(archive, *root);
+}
 
-    std::vector<uint32_t> pending{ *root };
+bool HostAnimation::load_at(const Archive& archive, uint32_t root_offset)
+{
+    return load_internal(archive, root_offset);
+}
+
+bool HostAnimation::load_internal(const Archive& archive, uint32_t root_offset)
+{
+    joints_.clear();
+    last_error_.clear();
+    if (!archive.contains_data_range(root_offset, kAnimJointSize)) {
+        last_error_ = "animation root offset is outside archive data";
+        return false;
+    }
+
+    std::vector<uint32_t> pending{ root_offset };
     std::unordered_map<uint32_t, uint32_t> indices;
     while (!pending.empty()) {
         const uint32_t offset = pending.back();

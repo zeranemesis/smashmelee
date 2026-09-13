@@ -81,13 +81,20 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       regression and a 90-second MSVC AddressSanitizer menu smoke test;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
+- [x] initialize Aurora's host GX FIFO explicitly from the incremental Melee
+      bootstrap; unlike the original `HuSysInit` path, this bootstrap does not
+      otherwise reach `GXInit`;
 - [x] advance the host HSD/GObj simulation on a bounded fixed 60 Hz clock,
       independent of Aurora's presentation cadence;
 - [x] mount a local GALE01 v1.02 ISO/RVZ, expose its GameCube FST, and materialize the `standScene` model/joint transforms from `GmRgStnd.dat` without unsafe host-pointer casts;
 - [x] preserve and validate HSD relocation records, including valid relocated
       zero offsets, instead of treating GameCube pointers as host pointers;
 - [x] decode indexed position streams and render the supported `standScene`
-      mesh hierarchy through Aurora GX with a temporary debug material;
+      mesh hierarchy through Aurora GX;
+- [x] resolve `HostScene::model_roots()` as host joint indices in the renderer
+      instead of incorrectly treating them as archive offsets; a Windows
+      capture now verifies original `MnMaAll.dat` geometry reaching the
+      framebuffer (158 draw calls in the tested main-menu frame);
 - [x] materialize the static HSD CObj camera (eye, interest, up vector,
       viewport, projection and depth planes), retaining a debug fallback for
       malformed or unsupported archives;
@@ -99,6 +106,9 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
 - [x] materialize and render first-level HSD TObj images, including direct and
       palette-backed GX formats, with indexed TEX0 coordinates; complete TEV
       chains remain unsupported;
+- [x] resolve the VS character-select model, camera, and `ANIM[3]` animation
+      roots from `MnSelectChrDataTable` in `MnSlChr.usd` (173 model/animation
+      joints, 201 draw objects and 4303 decoded triangles on GALE01 v1.02);
 - import the upstream `Runtime`, `sysdolphin`, and required `melee/lb` headers/sources;
 - make pointer-width and endian assumptions explicit;
 - compile object/class allocation, GObj scheduling, VI, and GX initialization;

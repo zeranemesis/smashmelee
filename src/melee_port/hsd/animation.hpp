@@ -40,11 +40,13 @@ struct HostAnimationJoint {
 class HostAnimation {
 public:
     bool load(const Archive& archive, std::string_view symbol);
+    bool load_at(const Archive& archive, uint32_t root_offset);
 
     const std::vector<HostAnimationJoint>& joints() const;
     const std::string& last_error() const;
 
 private:
+    bool load_internal(const Archive& archive, uint32_t root_offset);
     std::vector<HostAnimationJoint> joints_;
     std::string last_error_;
 };

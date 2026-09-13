@@ -122,7 +122,9 @@ class HostScene {
 public:
     bool load(const Archive& archive, std::string_view symbol);
     bool load_joint(const Archive& archive, std::string_view symbol);
+    bool load_joint_at(const Archive& archive, uint32_t root_offset);
     bool load_camera(const Archive& archive, std::string_view symbol);
+    bool load_camera_at(const Archive& archive, uint32_t description_offset);
 
     std::vector<HostJoint>& joints();
     const std::vector<HostJoint>& joints() const;
@@ -130,12 +132,13 @@ public:
     const std::vector<HostMaterial>& materials() const;
     const std::vector<HostTexture>& textures() const;
     const std::vector<HostDrawObject>& draw_objects() const;
+    // Indices into joints(), resolved from archive offsets during load.
     const std::vector<uint32_t>& model_roots() const;
     const std::string& last_error() const;
 
 private:
     bool load_internal(const Archive& archive, std::string_view symbol,
-                       bool direct_joint);
+                       bool direct_joint, uint32_t direct_root = UINT32_MAX);
     std::vector<HostJoint> joints_;
     std::vector<HostCamera> cameras_;
     std::vector<HostMaterial> materials_;
