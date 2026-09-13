@@ -23,7 +23,7 @@ The first porting milestone is implemented:
 - a host-width-safe HSD object allocator, root class/object model, GObj
   scheduler, and logical GX frame setup are compiled and self-tested at startup.
 
-This is not gameplay-ready yet. HSD integration has started; the next milestone is scene initialization, followed by Melee's scene system. See [docs/MELEE_PORT.md](docs/MELEE_PORT.md).
+This is not gameplay-ready yet. HSD integration has started; the next milestone is scene initialization, followed by Melee's scene system. [docs/PLAN.md](docs/PLAN.md) is the sequenced plan from here to a running game, and [docs/MELEE_PORT.md](docs/MELEE_PORT.md) records what each porting step established.
 
 ## Tests
 

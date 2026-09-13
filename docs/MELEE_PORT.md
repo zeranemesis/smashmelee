@@ -21,6 +21,13 @@ The reference entry point is `src/melee/gm/gmmain.c`. Its initialization order i
 
 Aurora already provides host implementations for much of the Dolphin SDK boundary (OS, VI, DVD, PAD, CARD, GX, and matrix primitives). Melee's `sysdolphin/baselib` is the main missing engine layer between those APIs and the game code.
 
+## Plan
+
+[PLAN.md](PLAN.md) sequences the work from today's state to a running game,
+with acceptance criteria and sizing for each phase. The milestones below
+record what has been established; the plan says what happens next and in what
+order.
+
 ## Milestones
 
 ### M0 — native shell (implemented)
