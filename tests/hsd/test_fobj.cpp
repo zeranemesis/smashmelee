@@ -4,6 +4,7 @@
 #include <melee/sysdolphin/baselib/objalloc.h>
 
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 // HSD animation bytecode is a stream of packs.  Each pack is an opcode byte, a
@@ -191,8 +192,8 @@ MELEE_TEST(FObj, RejectsANonFiniteRate)
     channel->frac_value = HSD_A_FRAC_U8;
 
     HSD_FObjReqAnimAll(channel, 0.0F);
-    const float infinite = 1.0F / 0.0F;
-    HSD_FObjInterpretAnim(channel, nullptr, nullptr, infinite);
+    HSD_FObjInterpretAnim(channel, nullptr, nullptr,
+                          std::numeric_limits<float>::infinity());
     // The channel must not advance its clock to a non-finite value.
     CHECK_EQ(channel->time, 0.0F);
     CHECK_EQ(HSD_FObjGetState(channel), 1U);

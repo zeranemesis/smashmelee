@@ -70,7 +70,8 @@ target_include_directories(melee_hsd_tests PRIVATE
 )
 
 if (MSVC)
-    target_compile_options(melee_hsd_tests PRIVATE /W4)
+    # C4324: the allocator case over-aligns its probe object deliberately.
+    target_compile_options(melee_hsd_tests PRIVATE /W4 /wd4324)
 else ()
     # The HSD sources use partial aggregate initialization for their static
     # class descriptors, which is intentional.
