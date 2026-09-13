@@ -291,6 +291,12 @@ def main() -> int:
     parser.add_argument("--link-surface", action="store_true",
                         help="also compile objects and report the unresolved "
                              "Dolphin SDK symbols")
+    parser.add_argument("--aurora-headers", action="store_true",
+                        help="compile against Aurora's Dolphin headers, which "
+                             "is the configuration a host port would use")
+    parser.add_argument("--only", default=None,
+                        help="restrict to sources under this path, relative "
+                             "to the checkout's src/ (e.g. sysdolphin/baselib)")
     parser.add_argument("--fobj-reference", action="store_true",
                         help="build upstream's HSD core and print what its "
                              "animation interpreter produces")
@@ -312,7 +318,8 @@ def main() -> int:
         force = shim_root / "force.h"
         repository = pathlib.Path(__file__).resolve().parent.parent
         aurora = repository / "extern" / "aurora" / "include"
-        if args.fobj_reference:
+        use_aurora = args.aurora_headers or args.fobj_reference
+        if use_aurora:
             if not (aurora / "dolphin" / "types.h").exists():
                 print("run: git submodule update --init --depth 1 "
                       "extern/aurora", file=sys.stderr)
@@ -334,6 +341,21 @@ typedef int BOOL;
 #endif
 typedef Vec Vec3;
 typedef S16Vec S16Vec3;
+
+/* Aurora's GeoTypes.h stops at Vec and S16Vec; the SDK also names these. */
+typedef struct { f32 x, y; } Vec2, *Vec2Ptr, Point2d, *Point2dPtr;
+typedef struct { s8 x, y, z; } S8Vec3, S8Vec, *S8Vec3Ptr, *S8VecPtr;
+typedef struct { u8 x, y, z, w; } U8Vec4, *U8Vec4Ptr;
+typedef struct { int x, y; } IntVec2, *IntVec2Ptr;
+typedef struct { s32 x, y; } S32Vec2, *S32Vec2Ptr;
+typedef struct { int x, y, z; } IntVec3, *IntVec3Ptr;
+typedef struct { s32 x, y, z; } S32Vec, S32Vec3, *S32VecPtr, *S32Vec3Ptr;
+typedef Quaternion Vec4;
+
+/* Aurora's GX headers do not carry the TEV clamp modes yet. */
+typedef enum _GXTevClampMode {
+    GX_TC_LINEAR, GX_TC_GE, GX_TC_EQ, GX_TC_LE, GX_MAX_TEVCLAMPMODE
+} GXTevClampMode;
 """)
         else:
             force.write_text(SHIM_FORCE)
@@ -342,22 +364,25 @@ typedef S16Vec S16Vec3;
             args.cc, "-std=gnu11", "-w",
             "-Wno-incompatible-function-pointer-types",
             f"-I{shim_root}",
-            *([f"-I{aurora}", f"-I{aurora / 'dolphin'}"]
-              if args.fobj_reference else []),
+            *([f"-I{aurora}", f"-I{aurora / 'dolphin'}"] if use_aurora else []),
             f"-I{source}",
             f"-I{upstream / 'extern' / 'dolphin' / 'include'}",
             f"-I{source / 'sysdolphin' / 'baselib'}",
             "-DNDEBUG=1", "-DVERSION_NTSC102",
-            *(["-DTARGET_PC"] if args.fobj_reference else []),
+            *(["-DTARGET_PC"] if use_aurora else []),
             "-include", str(force),
         ]
 
         if args.fobj_reference:
             return fobj_reference(upstream, args.cc, shim_root, command)
 
+        roots = ([source / args.only] if args.only
+                 else [source / "melee", source / "sysdolphin"])
         files = sorted(p for p in source.rglob("*.c")
-                       if p.is_relative_to(source / "melee")
-                       or p.is_relative_to(source / "sysdolphin"))
+                       if any(p.is_relative_to(root) for root in roots))
+        if not files:
+            print(f"no sources under {roots}", file=sys.stderr)
+            return 2
 
         objects = shim_root / "obj"
         objects.mkdir()
@@ -414,8 +439,10 @@ typedef S16Vec S16Vec3;
                                    (" ..." if count > 6 else ""))
 
     passed = len(files) - len(failures)
-    print(f"{passed}/{len(files)} upstream translation units pass a native "
-          f"syntax check ({passed * 100.0 / len(files):.1f}%)\n")
+    headers = "Aurora's" if (args.aurora_headers or args.fobj_reference) \
+        else "upstream's"
+    print(f"{passed}/{len(files)} upstream translation units build against "
+          f"{headers} Dolphin headers ({passed * 100.0 / len(files):.1f}%)\n")
 
     by_cause = collections.Counter(cause for _, cause in failures)
     print("Failures by cause:")

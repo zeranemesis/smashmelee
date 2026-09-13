@@ -19,15 +19,24 @@ This document records what was actually measured, not what seems plausible.
 
 `tools/upstream_native_spike.py` compiles every `.c` file under `src/melee`
 and `src/sysdolphin` of an upstream checkout with the host compiler and host
-libc, and groups the failures by cause.  `--link-surface` goes further: it
-emits real object files, links their symbol tables together, and reports which
-Dolphin SDK symbols remain unresolved and how many of those Aurora already
-implements.
+libc, and groups the failures by cause.
+
+- `--aurora-headers` compiles against Aurora's Dolphin headers with
+  `TARGET_PC`, which is the configuration a host port would use;
+- `--only <path>` narrows the run to one subtree;
+- `--link-surface` emits real object files, links their symbol tables
+  together, and reports which Dolphin SDK symbols remain unresolved and how
+  many of those Aurora already implements;
+- `--fobj-reference` builds upstream's HSD core and runs its animation
+  interpreter, printing the values `tests/hsd/test_fobj.cpp` asserts.
 
 ```sh
 git clone --depth 1 https://github.com/doldecomp/melee.git /tmp/melee-upstream
-tools/upstream_native_spike.py /tmp/melee-upstream
+tools/upstream_native_spike.py /tmp/melee-upstream --aurora-headers
+tools/upstream_native_spike.py /tmp/melee-upstream --aurora-headers \
+        --only sysdolphin/baselib
 tools/upstream_native_spike.py /tmp/melee-upstream --link-surface
+tools/upstream_native_spike.py /tmp/melee-upstream --fobj-reference
 ```
 
 It does not modify the checkout and copies no upstream code into this
@@ -43,21 +52,48 @@ Both are one-line accommodations a host port would carry permanently.
 
 ## Result
 
-With clang 18 targeting x86-64:
+Two configurations were measured. The first uses upstream's own Dolphin
+headers, which is the baseline; the second uses **Aurora's**, which is what a
+host port would actually compile against, and is therefore the number that
+matters.
+
+Aurora's headers are not a drop-in: they stop at `Vec` and `S16Vec` where the
+SDK also names `Vec2`, `Vec4`, `S8Vec3`, `U8Vec4`, `IntVec2`, `IntVec3`,
+`S32Vec2`, `S32Vec3`, and they omit `GXTevClampMode`. Nine typedefs and one
+enum, supplied by the spike's shim, are the whole difference between 12% and
+93%.
 
 ```
-940/984 upstream translation units pass a native syntax check (95.5%)
+# upstream's headers
+940/984 (95.5%) ... but u32 is `unsigned long` there, so every integer field
+                     doubles in width on LP64 -- compiling, not correct
 
-Failures by cause:
-    33  GameCube struct layout asserted (32-bit pointers)
-     8  declaration mismatch stricter than MWCC accepts
-     2  asset blob not in the repository
-     1  Metrowerks libc internals
-
-Failures by module:
-    18  melee/gm     9  melee/gr     4  melee/ty     4  sysdolphin/baselib
-     3  melee/if     3  melee/vi     2  melee/mn     1  melee/lb
+# Aurora's headers, with TARGET_PC (tools/upstream_native_spike.py --aurora-headers)
+918/984 (93.3%) whole game
+ 68/76  (89.5%) sysdolphin/baselib alone
 ```
+
+The 66 remaining failures are a list, and this is all of it:
+
+- 33 GameCube structure-layout assertions — the pointer-width fork, discussed
+  below;
+- 7 upstream declaration mismatches that only a compiler stricter than MWCC
+  reports;
+- 13 named gaps in Aurora's SDK surface: `GXSetTevClampMode`,
+  `GXInitFogAdjTable`, `GXSetArray` (Aurora takes five arguments where the
+  console SDK takes three — the two extra being a size bound and a
+  little-endian flag, which is Aurora's own answer to byte order),
+  `PADSetSamplingRate`, `CARDFormatAsync`, `VIPadFrameBufferWidth`, the
+  `PAD_CONFIRM`/`PAD_CANCEL`/`PAD_STICK_*`/`PAD_ANY_LEFT`/`PAD_LR_START`
+  constants, and the `state` and `fpscr` fields of `OSContext`;
+- 2 font blobs the decompilation does not redistribute, and one Metrowerks
+  libc internal in the debug console.
+
+Every scene-object unit the port needs compiles: `jobj`, `dobj`, `mobj`,
+`cobj`, `tobj`, `robj`, `aobj`, `fobj`, `objalloc`, `class`, `object`, `id`,
+`list`, `mtx`, `archive`, `tev`, `texp`, `shadow`, `lobj`, `spline`,
+`quatlib`, `random`, `util`, and `state`. `pobj` is the one that does not, on
+the `GXSetArray` arity alone.
 
 ## The link surface
 

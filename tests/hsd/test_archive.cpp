@@ -86,8 +86,11 @@ MELEE_TEST(Archive, TreatsRelocatedAndRawFieldsDifferently)
 
     REQUIRE(archive.data_pointer(fields + 0).has_value());
     CHECK_EQ(*archive.data_pointer(fields + 0), target);
-    // A relocated zero addresses the first byte of the data section, while an
-    // unrelocated zero is NULL; the two must not decode to the same offset.
+    // HSD relocation is `*field += (u32) archive->data` over every entry in
+    // the relocation table (Locate, in sysdolphin/baselib/archive.c).  A
+    // relocated zero therefore becomes the address of the first byte of the
+    // data section, while an unrelocated zero stays NULL; the two must not
+    // decode to the same offset on a host that keeps offsets.
     REQUIRE(archive.data_pointer(fields + 4).has_value());
     CHECK_EQ(*archive.data_pointer(fields + 4), 0U);
     REQUIRE(archive.data_pointer(fields + 8).has_value());
