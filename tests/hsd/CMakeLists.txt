@@ -153,6 +153,7 @@ else ()
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_aobj.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_archive.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_objalloc.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_quatlib.cpp
             ${CMAKE_CURRENT_LIST_DIR}/upstream_host.c
             ${MELEE_UPSTREAM_UNITS}
             ${MELEE_AURORA_MATH}

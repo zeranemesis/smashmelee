@@ -56,7 +56,13 @@ shadows `src/Runtime/platform.h` on the include path:
 - `extern/dolphin/include/libc/math.h` defines `fabsf` as a macro, which
   rewrites the host `math.h` declaration of the same name.
 
-Both are one-line accommodations a host port would carry permanently.
+Both are one-line accommodations a host port would carry permanently. A third
+joined them once the Windows job reached `mtx.c` and `quatlib.c`: `M_PI` and
+`M_PI_2` are not in standard C, and the two hosts disagree about how to ask
+for them — MSVC wants `_USE_MATH_DEFINES` before `<math.h>`, glibc wants
+`_DEFAULT_SOURCE`, which it has by default and loses under strict ISO. The
+prelude asks both ways and then falls back to the literals, which are the same
+in both libraries.
 
 ## Result
 

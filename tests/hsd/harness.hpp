@@ -27,6 +27,15 @@ template <typename T> std::string describe(const T& value)
 inline std::string describe(std::nullptr_t) { return "nullptr"; }
 inline std::string describe(bool value) { return value ? "true" : "false"; }
 
+// The math units go through the host's libm, which agrees with the GameCube's
+// to a few bits rather than exactly, so their results are compared with a
+// tolerance.  Everything else in the suite is exact and stays that way.
+inline bool within(double actual, double expected, double tolerance)
+{
+    const double difference = actual - expected;
+    return (difference < 0.0 ? -difference : difference) <= tolerance;
+}
+
 } // namespace meleeboard::test
 
 #define MELEE_TEST_CONCAT_INNER(a, b) a##b
@@ -86,5 +95,21 @@ inline std::string describe(bool value) { return value ? "true" : "false"; }
                     ", expected " +                                            \
                     ::meleeboard::test::describe(melee_test_expected) + ")");  \
             ::meleeboard::test::abort_case();                                  \
+        }                                                                      \
+    } while (false)
+
+// Approximate comparison, for the math units only.  See within() above.
+#define CHECK_NEAR(actual, expected, tolerance)                                \
+    do {                                                                       \
+        const double melee_test_actual = (actual);                             \
+        const double melee_test_expected = (expected);                         \
+        if (!::meleeboard::test::within(melee_test_actual,                     \
+                                        melee_test_expected, (tolerance))) {   \
+            ::meleeboard::test::record_failure(                                \
+                __FILE__, __LINE__,                                            \
+                std::string(#actual " ~= " #expected " (actual ") +            \
+                    ::meleeboard::test::describe(melee_test_actual) +          \
+                    ", expected " +                                            \
+                    ::meleeboard::test::describe(melee_test_expected) + ")");  \
         }                                                                      \
     } while (false)

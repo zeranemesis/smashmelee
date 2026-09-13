@@ -162,6 +162,17 @@ order.
 - [x] assert that upstream's `HSD_ArchiveParse` refuses a big-endian
       container on a little-endian host, which is the converters'
       justification stated in upstream's own code;
+- [x] drive `quatlib`'s interpolator through all three of its branches.  Its
+      third is the one the Windows job kept failing to compile: `M_PI_2` is
+      not in standard C, and neither is `M_PI` in `mtx.c` — see
+      [UPSTREAM_NATIVE_SPIKE.md](UPSTREAM_NATIVE_SPIKE.md).  That branch,
+      between opposed quaternions, writes a perpendicular into `out` and then
+      interpolates against the `q` it was handed rather than the
+      perpendicular, so the write only survives when the caller passes one
+      quaternion as both — and `lb_00B0.c` passes three.  On the path the game
+      takes, the weights cancel and the result is the zero quaternion.  It is
+      asserted as such: a reimplementation that corrected it would diverge
+      from the disc;
 - [x] carry the SDK spellings Aurora's Dolphin headers omit in
       `include/melee/port/dolphin_compat.h`, and shadow upstream's
       `Runtime/platform.h` from `cmake/MeleeUpstream.cmake` so its `ssize_t`

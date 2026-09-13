@@ -13,10 +13,31 @@
 // The measurements behind this list are in docs/UPSTREAM_NATIVE_SPIKE.md;
 // every entry here closed a named compile failure.
 
+// mtx.c, quatlib.c, jobj.c and generator.c use M_PI and M_PI_2.  They are not
+// in standard C at all: glibc offers them unless asked for strict ISO, and
+// MSVC's <math.h> withholds them until this is defined.  It has to arrive
+// before the first <math.h> in the translation unit, because the constants sit
+// behind that header's own include guard -- cmake/MeleeUpstream.cmake also
+// passes it on the command line, which is the route that cannot be too late.
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES 1
+#endif
+
 // The host declarations have to be seen before anything can macro over them.
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
+
+// _USE_MATH_DEFINES is MSVC's mechanism and only MSVC's: glibc gates these on
+// _DEFAULT_SOURCE instead, so a strict-ISO build would still not have them.
+// The platform's own definitions are preferred where they exist; these are the
+// literals both MSVC and glibc use, so the fallback cannot change a result.
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+#ifndef M_PI_2
+#define M_PI_2 1.57079632679489661923
+#endif
 
 // The Metrowerks libc rewrites fabs/fabsf into PowerPC intrinsics that have no
 // host definition.  Take the host's.

@@ -101,7 +101,12 @@ function(melee_upstream_configure target)
             ${MELEE_UPSTREAM_ROOT}/extern/dolphin/include
     )
     target_compile_definitions(${target} PRIVATE
-            TARGET_PC NDEBUG=1 VERSION_NTSC102)
+            TARGET_PC NDEBUG=1 VERSION_NTSC102
+            # M_PI and M_PI_2, which MSVC's <math.h> withholds without it.  On
+            # the command line rather than only in the prelude: the constants
+            # sit behind that header's include guard, so a definition that
+            # arrives after some other header pulled <math.h> in has no effect.
+            _USE_MATH_DEFINES)
 
     # Upstream's C is force-fed the prelude.  On MSVC the flags are not
     # gated by language: the Visual Studio generator does not reliably honour
