@@ -59,7 +59,7 @@ reimplemented. The rest of the sequencing still holds.
 
 ---
 
-## Phase 0 — Make upstream source available to the build
+## Phase 0 — Make upstream source available to the build · **done**
 
 **Objective.** The build can compile upstream C without anyone copying it in
 by hand.
@@ -76,10 +76,25 @@ by hand.
 4. Teach the offline suite to build upstream units, so a ported unit and its
    replacement can be compared in the same binary.
 
-**Done when** `cmake --build` compiles one upstream translation unit
-(`objalloc.c`) and the suite runs its cases against both implementations.
+**Done.** `doldecomp/melee` is pinned at `extern/melee`,
+`include/melee/port/dolphin_compat.h` carries the SDK spellings Aurora lacks,
+`cmake/MeleeUpstream.cmake` generates the `Runtime/platform.h` shadow and
+configures a target, and `melee_hsd_upstream_tests` compiles upstream's
+`objalloc.c` and `memory.c` and drives them through the same behavioral
+assertions the port's allocator answers. Both binaries run under `ctest`, on
+three toolchains.
 
-**Size.** Small. One submodule, one header, one CMake target.
+Two findings came out of getting it to run, and both change phase 2:
+
+- **`HSD_ObjSetHeap`'s arena cannot be used on a 64-bit host.** `objheap`
+  holds its bounds as four `u32` fields, so `obj_heap.curr = (u32) ptr`
+  truncates the address and the first allocation dereferences garbage.
+  Leaving the arena unset takes the other path in `HSD_ObjAllocAddFree`,
+  which calls `HSD_MemAlloc` and keeps a real `void*`. A host build has to
+  take that path.
+- **`HSD_ObjAlloc` refills one object at a time**, so pool slots are not
+  contiguous the way the port's block allocator makes them. Nothing depends
+  on that, but a test that assumes adjacency will fail.
 
 ## Phase 1 — Close the Dolphin SDK boundary
 
@@ -134,10 +149,29 @@ The suite already pins `objalloc`, `class`/`object`, `list`, `id`, `fobj`
 (twelve stream shapes) and `aobj` (seven playback modes) against upstream's
 own behavior, so most of this phase has its acceptance test written already.
 
+### What the pointer work actually is
+
+`tools/upstream_native_spike.py --pointer-casts` inventories every place
+upstream truncates a pointer through a 32-bit integer. Across
+`sysdolphin/baselib` there are 470 of them, but they are concentrated in
+subsystems the port does not reach — 282 in one unidentified unit, 42 in the
+particle generator, 21 in the debug console. **In the 27 units the port
+depends on there are 16, in 6 units**, and they fall into three patterns:
+
+| Pattern | Sites | What it is |
+|---|---|---|
+| ID-table keys | 9 (`jobj`, `pobj`, `robj`, `aobj`) | HSD stores a descriptor's **address** as the hash key for the runtime object built from it — `HSD_IDInsertToTable(NULL, (u32) joint, jobj)`. Key on the archive offset instead, which the port already carries and which cannot collide within an archive. |
+| `GXSetArray` arity | 2 (`pobj`) | Aurora takes a size bound and a little-endian flag the console SDK does not. |
+| In-place relocation | 1 (`archive`) | `Locate()`'s `*ptr += (u32) archive->data`. This is the one the `*32b` converters replace. |
+| Pool arena | 7 (`objalloc`) | Avoided entirely by leaving `HSD_ObjSetHeap` unset, as phase 0 found. |
+
+Twenty of the 27 core units are completely pointer-clean, `jobj` included.
+
 **Done when** no file remains under `src/melee_port/hsd/`, and all 61 cases
 plus whatever the swap adds are green on three toolchains.
 
-**Size.** Large but bounded: ~35 converters, ~76 units to bring up.
+**Size.** Large but bounded: ~35 converters, ~76 units to bring up, and 16
+pointer casts to resolve in the units that matter.
 
 ## Phase 3 — The first frame drawn by the game's own code
 
@@ -259,19 +293,26 @@ ever. A legally obtained disc image is a runtime input.
 4. **The 33 structure-layout assertions.** They exist to verify the match
    against the original binary and are meaningless on a 64-bit host.
    Mitigation: disable for host builds, and record that the `*32b` twins are
-   what now guarantees the layout.
+   what now guarantees the layout. They are also the wrong inventory to work
+   from — `--pointer-casts` names the actual sites, and there are 16 of them
+   in the units that matter.
 5. **Upstream drift.** The submodule is pinned; updating it is a deliberate
    act with the suite as the gate.
 
 ## The next five actions
 
-1. Pin `doldecomp/melee` as `extern/melee` and add the `melee_upstream` CMake
-   target (phase 0).
-2. Promote the spike's shim to `include/melee/port/dolphin_compat.h` and
-   compile upstream's `objalloc.c` in the test build (phase 0).
-3. Write the 23 `MTX` helpers with unit tests (phase 1) — self-contained, and
+Phase 0 is done. These are what follow.
+
+1. Write the 23 `MTX` helpers with unit tests (phase 1) — self-contained, and
    it unblocks `cobj`.
-4. Decide the threading model and write it down (phase 1).
-5. Write `HSD_Joint32b` and `byteswap_hsd_joint()`, and check it against
+2. Decide the threading model and write it down (phase 1). Everything above
+   phase 1 inherits it.
+3. Key the HSD ID table on archive offsets rather than descriptor addresses
+   (phase 2) — nine of the sixteen pointer casts, and the port's `id` unit
+   already uses 32-bit keys, so this is a decision more than a discovery.
+4. Write `HSD_Joint32b` and `byteswap_hsd_joint()`, and check it against
    `HostScene`'s existing joint decode (phase 2) — the first converter, with
    its oracle already in the repository.
+5. Move `class`, `object`, `list` and `id` onto upstream's units in
+   `melee_hsd_upstream_tests` (phase 2) — all four are pointer-clean and all
+   four already have their acceptance tests written.

@@ -7,3 +7,8 @@
 [submodule "extern/libco"]
 	path = extern/libco
 	url = https://github.com/higan-emu/libco.git
+[submodule "extern/melee"]
+	path = extern/melee
+	url = https://github.com/doldecomp/melee.git
+	branch = master
+	shallow = true

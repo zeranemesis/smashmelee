@@ -27,6 +27,10 @@ of bytecode streams, and prints what it produces.  Those values are what
 tests/hsd/test_fobj.cpp asserts, so the port is pinned to the original
 implementation rather than to a reading of the format.
 
+``--pointer-casts`` reports where upstream truncates a pointer through a 32-bit
+integer.  Those casts, not the structure-layout assertions, are the real
+inventory of what a 64-bit host has to change.
+
 Usage:
     tools/upstream_native_spike.py /path/to/doldecomp/melee [--cc clang]
     tools/upstream_native_spike.py /path/to/doldecomp/melee --link-surface
@@ -38,6 +42,7 @@ from __future__ import annotations
 import argparse
 import collections
 import concurrent.futures
+import os
 import pathlib
 import re
 import shutil
@@ -80,6 +85,65 @@ CAUSES = [
     ("incompatible function pointer type",
      re.compile(r"incompatible function pointer types")),
 ]
+
+
+# The HSD units the port depends on, in the order phase 2 of docs/PLAN.md
+# brings them up.  The totals across sysdolphin are dominated by the particle
+# system and the debug console, which the port does not reach, so this set is
+# reported on its own.
+CORE_UNITS = (
+    "objalloc", "class", "object", "list", "id", "mtx", "fobj", "aobj",
+    "jobj", "dobj", "mobj", "tobj", "pobj", "cobj", "lobj", "robj",
+    "archive", "tev", "texp", "shadow", "spline", "quatlib", "random",
+    "util", "state", "memory", "hash",
+)
+
+POINTER_CAST_WARNINGS = (
+    "-Wpointer-to-int-cast", "-Wint-to-pointer-cast",
+    "-Wvoid-pointer-to-int-cast", "-Wint-to-void-pointer-cast",
+)
+
+
+def pointer_casts(files: list[pathlib.Path], source: pathlib.Path,
+                  command: list[str]) -> int:
+    """Counts the 32-bit pointer casts in each translation unit."""
+    per_unit: collections.Counter = collections.Counter()
+    sites: dict[str, list[str]] = collections.defaultdict(list)
+
+    # The shared command silences warnings wholesale; these are the ones the
+    # inventory is made of, so drop that and re-enable only them.
+    loud = [argument for argument in command if argument != "-w"]
+
+    def scan(path: pathlib.Path) -> tuple[str, int, list[str]]:
+        result = subprocess.run(
+            loud + ["-c", "-O0", "-o", os.devnull, "-Wno-everything",
+                    *POINTER_CAST_WARNINGS, str(path)],
+            capture_output=True, text=True)
+        unit = path.stem
+        lines = [line.strip() for line in result.stderr.splitlines()
+                 if "warning:" in line]
+        return unit, len(lines), lines
+
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        for unit, count, lines in pool.map(scan, files):
+            if count:
+                per_unit[unit] = count
+                sites[unit] = lines
+
+    total = sum(per_unit.values())
+    core = {unit: count for unit, count in per_unit.items()
+            if unit in CORE_UNITS}
+    print(f"{total} pointer-truncating casts across {len(per_unit)} of "
+          f"{len(files)} translation units\n")
+    print(f"In the {len(CORE_UNITS)} units the port depends on: "
+          f"{sum(core.values())} casts in {len(core)} of them")
+    for unit, count in sorted(core.items(), key=lambda kv: -kv[1]):
+        print(f"  {count:4d}  {unit}")
+    print("\nElsewhere (subsystems the port does not reach yet):")
+    for unit, count in sorted(per_unit.items(), key=lambda kv: -kv[1]):
+        if unit not in CORE_UNITS:
+            print(f"  {count:4d}  {unit}")
+    return 0
 
 
 SDK_PREFIXES = ("GX", "OS", "VI", "DVD", "CARD", "PAD", "SI", "ARQ", "AR",
@@ -297,6 +361,9 @@ def main() -> int:
     parser.add_argument("--only", default=None,
                         help="restrict to sources under this path, relative "
                              "to the checkout's src/ (e.g. sysdolphin/baselib)")
+    parser.add_argument("--pointer-casts", action="store_true",
+                        help="report where upstream truncates a pointer "
+                             "through a 32-bit integer")
     parser.add_argument("--fobj-reference", action="store_true",
                         help="build upstream's HSD core and print what its "
                              "animation interpreter produces")
@@ -318,7 +385,8 @@ def main() -> int:
         force = shim_root / "force.h"
         repository = pathlib.Path(__file__).resolve().parent.parent
         aurora = repository / "extern" / "aurora" / "include"
-        use_aurora = args.aurora_headers or args.fobj_reference
+        use_aurora = (args.aurora_headers or args.fobj_reference
+                      or args.pointer_casts)
         if use_aurora:
             if not (aurora / "dolphin" / "types.h").exists():
                 print("run: git submodule update --init --depth 1 "
@@ -383,6 +451,9 @@ typedef enum _GXTevClampMode {
         if not files:
             print(f"no sources under {roots}", file=sys.stderr)
             return 2
+
+        if args.pointer_casts:
+            return pointer_casts(files, source, command)
 
         objects = shim_root / "obj"
         objects.mkdir()

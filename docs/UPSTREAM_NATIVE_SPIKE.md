@@ -28,7 +28,10 @@ libc, and groups the failures by cause.
   together, and reports which Dolphin SDK symbols remain unresolved and how
   many of those Aurora already implements;
 - `--fobj-reference` builds upstream's HSD core and runs its animation
-  interpreter, printing the values `tests/hsd/test_fobj.cpp` asserts.
+  interpreter, printing the values `tests/hsd/test_fobj.cpp` asserts;
+- `--pointer-casts` inventories every place upstream truncates a pointer
+  through a 32-bit integer, reporting the units the port depends on
+  separately from the rest.
 
 ```sh
 git clone --depth 1 https://github.com/doldecomp/melee.git /tmp/melee-upstream
@@ -37,7 +40,12 @@ tools/upstream_native_spike.py /tmp/melee-upstream --aurora-headers \
         --only sysdolphin/baselib
 tools/upstream_native_spike.py /tmp/melee-upstream --link-surface
 tools/upstream_native_spike.py /tmp/melee-upstream --fobj-reference
+tools/upstream_native_spike.py /tmp/melee-upstream --pointer-casts \
+        --only sysdolphin/baselib
 ```
+
+Since the submodule landed, `extern/melee` works in place of a separate
+checkout.
 
 It does not modify the checkout and copies no upstream code into this
 repository. Two host shims are generated into a temporary directory that
@@ -197,6 +205,32 @@ platform, while the byteswap-and-widen route is already proven here.
 A 32-bit measurement was attempted and is not reported: this container has no
 32-bit libc headers, so the run failed for an environment reason and says
 nothing about the code.
+
+## Where the pointers actually truncate
+
+The 33 structure-layout assertions say that something about the layout is
+wrong on a 64-bit host; they do not say where. `--pointer-casts` does.
+
+```
+470 pointer-truncating casts across 23 of 76 translation units
+
+In the 27 units the port depends on: 16 casts in 6 of them
+     7  objalloc          3  jobj          2  pobj
+     2  robj              1  aobj          1  archive
+```
+
+The 470 is dominated by subsystems the port does not reach: 282 in one
+unidentified unit, 42 in the particle generator, 24 in the particle system,
+21 in the debug console. Twenty of the 27 core units are completely clean,
+`jobj` included, and the sixteen that remain are three patterns rather than
+sixteen problems — the ID table keying runtime objects on a descriptor's
+address, `GXSetArray`'s arity, and `Locate()`'s in-place relocation. They are
+tabulated in [PLAN.md](PLAN.md) under phase 2.
+
+This is the inventory to work from. It is also how phase 0 found that
+`HSD_ObjSetHeap`'s arena holds its bounds as four `u32` fields and cannot be
+used on a 64-bit host at all: the first upstream unit this repository
+compiled segfaulted on exactly that, and the cast warnings named it.
 
 ## Sizing the conversion
 

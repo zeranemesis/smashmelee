@@ -10,10 +10,13 @@
 # It is also picked up by the main build when MELEE_BUILD_TESTS is ON.
 
 cmake_minimum_required(VERSION 3.20)
-project(melee_hsd_tests CXX)
+project(melee_hsd_tests C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Upstream's C is C89 with a few C99 conveniences; C11 accepts all of it.
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE RelWithDebInfo)
@@ -88,3 +91,66 @@ endif ()
 
 include(CTest)
 add_test(NAME melee_hsd_tests COMMAND melee_hsd_tests)
+
+# ---------------------------------------------------------------------------
+# Upstream conformance target
+#
+# Phase 2 of docs/PLAN.md replaces the hand-written HSD with upstream's one
+# unit at a time.  This second binary compiles the units that have moved over
+# and drives them through the same behavioral assertions, so the swap is
+# exercised continuously rather than in one step at the end.  The two binaries
+# cannot be one: both implementations define HSD_ObjAlloc.
+#
+# Units that have moved: sysdolphin/baselib/objalloc, and memory, which the
+# allocator falls back on when no arena has been set.
+
+include(${MELEE_HSD_TESTS_ROOT}/cmake/MeleeUpstream.cmake)
+melee_upstream_available(MELEE_UPSTREAM_PRESENT)
+
+if (NOT MELEE_UPSTREAM_PRESENT)
+    message(STATUS "melee: extern/melee is not checked out; skipping the "
+            "upstream conformance target "
+            "(git submodule update --init --depth 1 extern/melee)")
+else ()
+    melee_upstream_sources(MELEE_UPSTREAM_UNITS
+            sysdolphin/baselib/objalloc
+            sysdolphin/baselib/memory)
+
+    add_executable(melee_hsd_upstream_tests
+            ${CMAKE_CURRENT_LIST_DIR}/harness.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_objalloc.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/upstream_host.c
+            ${MELEE_UPSTREAM_UNITS}
+    )
+    target_include_directories(melee_hsd_upstream_tests PRIVATE
+            ${CMAKE_CURRENT_LIST_DIR})
+    melee_upstream_configure(melee_hsd_upstream_tests)
+
+    if (MSVC)
+        target_compile_options(melee_hsd_upstream_tests PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:/W4>)
+    else ()
+        target_compile_options(melee_hsd_upstream_tests PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+                $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+                # HSD_ASSERT hands __FILE__ to a char* parameter, which C++
+                # objects to and C does not.
+                $<$<COMPILE_LANGUAGE:CXX>:-Wno-writable-strings>
+                $<$<COMPILE_LANGUAGE:CXX>:-Wno-write-strings>)
+    endif ()
+
+    if (MELEE_TESTS_SANITIZE AND NOT MSVC)
+        target_compile_options(melee_hsd_upstream_tests PRIVATE
+                -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(melee_hsd_upstream_tests PRIVATE
+                -fsanitize=address,undefined)
+    endif ()
+
+    add_test(NAME melee_hsd_upstream_tests COMMAND melee_hsd_upstream_tests)
+    if (MELEE_TESTS_SANITIZE AND NOT MSVC)
+        # See lsan_suppressions.txt: upstream's allocator keeps its pools for
+        # the life of the process, by design.
+        set_tests_properties(melee_hsd_upstream_tests PROPERTIES ENVIRONMENT
+                "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_LIST_DIR}/lsan_suppressions.txt:print_suppressions=0")
+    endif ()
+endif ()

@@ -39,6 +39,16 @@ ctest --test-dir build/hsd-tests --output-on-failure
 It runs in CI on GCC (with sanitizers), Clang, and MSVC. Every change to the
 HSD decoders should come with a case there.
 
+`ctest` runs two binaries. `melee_hsd_tests` covers the port's own HSD;
+`melee_hsd_upstream_tests` compiles the units that have been moved over to
+`doldecomp/melee`'s own sources and drives them through the same behavioral
+assertions, so the swap described in [docs/PLAN.md](docs/PLAN.md) is
+exercised continuously. The second needs the upstream submodule:
+
+```sh
+git submodule update --init --depth 1 extern/melee
+```
+
 ## Source reference
 
 The gameplay and HAL code reference is the upstream [`doldecomp/melee`](https://github.com/doldecomp/melee) project, targeting USA v1.02. Keep that source separate from proprietary disc contents.

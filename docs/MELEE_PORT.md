@@ -140,6 +140,15 @@ order.
 - [x] initialize the HSD object pools explicitly in `HSD_ObjInit` order
       instead of as a side effect of boot-time self-tests, and move that
       verification into the offline suite (see below);
+- [x] pin `doldecomp/melee` at `extern/melee` and compile its `objalloc.c`
+      and `memory.c` in `melee_hsd_upstream_tests`, driven through the same
+      behavioral assertions the port's own allocator answers; this is phase 0
+      of [PLAN.md](PLAN.md) and the mechanism phase 2 uses for every
+      subsequent unit;
+- [x] carry the SDK spellings Aurora's Dolphin headers omit in
+      `include/melee/port/dolphin_compat.h`, and shadow upstream's
+      `Runtime/platform.h` from `cmake/MeleeUpstream.cmake` so its `ssize_t`
+      declaration stops colliding with the host libc;
 - import the upstream `Runtime`, `sysdolphin`, and required `melee/lb` headers/sources;
 - make pointer-width and endian assumptions explicit;
 - compile object/class allocation, GObj scheduling, VI, and GX initialization;
