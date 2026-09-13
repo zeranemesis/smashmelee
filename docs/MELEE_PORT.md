@@ -145,6 +145,14 @@ order.
       behavioral assertions the port's own allocator answers; this is phase 0
       of [PLAN.md](PLAN.md) and the mechanism phase 2 uses for every
       subsequent unit;
+- [x] run upstream's `class`, `object`, `list` and `id` beside the port's
+      through the same assertions.  This found that `ref_DEC` released a
+      reference one call early: HSD's counter holds the references beyond the
+      first and reports the release when it was already zero, wrapping past it
+      to `HSD_OBJ_NOREF`, where the port decremented first and reported on
+      reaching zero.  It also established that `hsdSearchClassInfo` is a host
+      addition — upstream's reads a hash nothing in the decompilation
+      populates, so it always answers NULL;
 - [x] carry the SDK spellings Aurora's Dolphin headers omit in
       `include/melee/port/dolphin_compat.h`, and shadow upstream's
       `Runtime/platform.h` from `cmake/MeleeUpstream.cmake` so its `ssize_t`

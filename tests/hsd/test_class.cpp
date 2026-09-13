@@ -37,21 +37,29 @@ MELEE_TEST(Class, CountsReferencesIndependently)
 
     auto* object = static_cast<HSD_Obj*>(hsdNew(&hsdObj));
     REQUIRE(object != nullptr);
+    // ref_count holds the references beyond the first: a fresh object sits at
+    // zero with one owner, so the first release already reports true.  These
+    // are the values sysdolphin/baselib/object.h produces.
     CHECK_EQ(ref_CNT(object), 0);
-
     ref_INC(object);
     ref_INC(object);
     CHECK_EQ(ref_CNT(object), 2);
-    // Only the drop to zero reports "this was the last reference".
     CHECK(!ref_DEC(object));
-    CHECK(ref_DEC(object));
+    CHECK_EQ(ref_CNT(object), 1);
+    CHECK(!ref_DEC(object));
     CHECK_EQ(ref_CNT(object), 0);
+    // The count was already zero, so this is the last release, and the counter
+    // wraps past it to HSD_OBJ_NOREF.
+    CHECK(ref_DEC(object));
+    CHECK_EQ(ref_CNT(object), -1);
+    // Every further release reports true without touching the counter.
+    CHECK(ref_DEC(object));
+    CHECK_EQ(ref_CNT(object), -1);
 
     // The individual reference counter is tracked separately from the shared
     // one, as Melee relies on for per-owner joint/animation references.
     iref_INC(object);
     CHECK_EQ(iref_CNT(object), 1);
-    CHECK_EQ(ref_CNT(object), 0);
     CHECK(iref_DEC(object));
     CHECK_EQ(iref_CNT(object), 0);
 

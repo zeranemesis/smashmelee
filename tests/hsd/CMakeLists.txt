@@ -101,8 +101,9 @@ add_test(NAME melee_hsd_tests COMMAND melee_hsd_tests)
 # exercised continuously rather than in one step at the end.  The two binaries
 # cannot be one: both implementations define HSD_ObjAlloc.
 #
-# Units that have moved: sysdolphin/baselib/objalloc, and memory, which the
-# allocator falls back on when no arena has been set.
+# Units that have moved: objalloc, class, object, list, id, and the two the
+# rest depend on -- memory, which the allocator falls back on when no arena is
+# set, and hash, which the class registry searches through.
 
 include(${MELEE_HSD_TESTS_ROOT}/cmake/MeleeUpstream.cmake)
 melee_upstream_available(MELEE_UPSTREAM_PRESENT)
@@ -114,10 +115,16 @@ if (NOT MELEE_UPSTREAM_PRESENT)
 else ()
     melee_upstream_sources(MELEE_UPSTREAM_UNITS
             sysdolphin/baselib/objalloc
-            sysdolphin/baselib/memory)
+            sysdolphin/baselib/class
+            sysdolphin/baselib/object
+            sysdolphin/baselib/list
+            sysdolphin/baselib/id
+            sysdolphin/baselib/memory
+            sysdolphin/baselib/hash)
 
     add_executable(melee_hsd_upstream_tests
             ${CMAKE_CURRENT_LIST_DIR}/harness.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_core.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_objalloc.cpp
             ${CMAKE_CURRENT_LIST_DIR}/upstream_host.c
             ${MELEE_UPSTREAM_UNITS}
@@ -128,7 +135,12 @@ else ()
 
     if (MSVC)
         target_compile_options(melee_hsd_upstream_tests PRIVATE
-                $<$<COMPILE_LANGUAGE:CXX>:/W4>)
+                $<$<COMPILE_LANGUAGE:CXX>:/W4>
+                # HSD_ASSERT hands __FILE__ to a char* parameter, and
+                # hsdInitClassInfo takes its names the same way.  C accepts
+                # that; C++ needs the older string-literal conversion, which
+                # is the exact counterpart of -Wno-writable-strings below.
+                $<$<COMPILE_LANGUAGE:CXX>:/Zc:strictStrings->)
     else ()
         target_compile_options(melee_hsd_upstream_tests PRIVATE
                 $<$<COMPILE_LANGUAGE:CXX>:-Wall>

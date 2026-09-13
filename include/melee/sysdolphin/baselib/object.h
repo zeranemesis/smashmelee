@@ -26,24 +26,26 @@ extern HSD_ClassInfo hsdObj;
 void ObjInfoInit(void);
 bool hsdObjIsDescendantOf(const HSD_Obj* object, HSD_ClassInfo* parent);
 
+// ref_count holds the references beyond the first, so a freshly created
+// object sits at zero with one owner.  ref_DEC reports the release when the
+// count was already zero and lets the counter wrap to HSD_OBJ_NOREF on the way
+// past, which is what makes every later release report true as well.  The NULL
+// guard is a host addition; upstream dereferences unconditionally.
 static inline bool ref_DEC(void* object)
 {
     HSD_Obj* hsd_object = (HSD_Obj*) object;
     if (hsd_object == NULL || hsd_object->ref_count == HSD_OBJ_NOREF) {
         return true;
     }
-    if (hsd_object->ref_count == 0) {
-        return true;
-    }
-    --hsd_object->ref_count;
-    return hsd_object->ref_count == 0;
+    return hsd_object->ref_count-- == 0;
 }
 
 static inline void ref_INC(void* object)
 {
     HSD_Obj* hsd_object = (HSD_Obj*) object;
-    if (hsd_object != NULL && hsd_object->ref_count != HSD_OBJ_NOREF &&
-        hsd_object->ref_count < UINT16_MAX - 1) {
+    if (hsd_object != NULL) {
+        // Upstream asserts here that the result is not HSD_OBJ_NOREF, which
+        // would take 65,534 references to reach.
         ++hsd_object->ref_count;
     }
 }
