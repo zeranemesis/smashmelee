@@ -123,6 +123,23 @@ function(melee_upstream_configure target)
     endif ()
 endfunction()
 
+# Aurora's Dolphin matrix and vector implementations.  They compile against
+# their own headers with no further dependency, so a target can link the SDK's
+# math without pulling in the graphics stack.  Aurora also macro-aliases the
+# unprefixed MTX* and PSMTX* spellings onto these, which is why upstream's
+# scene units resolve against them unchanged.
+function(melee_aurora_math_sources result)
+    set(math ${MELEE_REPOSITORY_ROOT}/extern/aurora/lib/dolphin/mtx)
+    set(${result}
+            ${math}/mtx.c
+            ${math}/mtx44.c
+            ${math}/mtxvec.c
+            ${math}/mtxstack.c
+            ${math}/quat.c
+            ${math}/vec.c
+            PARENT_SCOPE)
+endfunction()
+
 # Absolute paths for upstream translation units named as `sysdolphin/baselib/x`.
 function(melee_upstream_sources result)
     set(paths "")

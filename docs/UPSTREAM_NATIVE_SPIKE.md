@@ -120,17 +120,27 @@ Aurora implements 151 of those 212; 61 are missing:
      1  PAD: PADSetSamplingRate
 ```
 
-Sixty-one symbols is a list, not a project.  Most are shallow on a host: the
-`MTX` projection helpers are textbook matrices, the `DC*` cache operations are
-no-ops on a coherent host, and the `OS` thread and alarm surface maps onto the
-host's own threading.  The rest of the 882 splits into roughly 520 symbols
-that the 44 uncompiled files would themselves define, the musyx audio API
-(`AX*`, `AXFX*` — already vendored as a submodule here), THP movie playback,
-and a handful of libc functions.
+That 61 is an overcount, and the correction matters more than the number. It
+was derived by scanning Aurora's `lib` sources for function definitions at
+column zero, which cannot see a macro — and Aurora macro-aliases the
+unprefixed SDK spellings onto its own implementations (`#define
+MTXPerspective C_MTXPerspective`, `#define PSMTXIdentity MTXIdentity`).
+Checking the same 61 against Aurora's **headers** instead puts 56 of them
+within reach and leaves five genuinely absent: `GXInitFogAdjTable`,
+`GXNtsc480IntDf`, `GXSetTevClampMode`, `GXWaitDrawDone`, and
+`PADSetSamplingRate`.
 
-One caveat on the Aurora figure: it is derived by scanning Aurora's sources
-for function definitions, so it counts what is written, not what is verified
-to behave like the console.
+Neither method is the answer. One under-reports because of macros; the other
+over-reports, because a declaration in a header is not an implementation in a
+library. Only a link settles it, and for the math group it now has: Aurora's
+six matrix and vector units compile against their own headers with no further
+dependency and resolve every math symbol upstream's scene units reference, as
+`melee_hsd_upstream_tests` demonstrates by linking them.
+
+The rest of the 882 splits into roughly 520 symbols that the 44 uncompiled
+files would themselves define, the musyx audio API (`AX*`, `AXFX*` — already
+vendored as a submodule here), THP movie playback, and a handful of libc
+functions.
 
 ## Running upstream, and what it found
 

@@ -101,10 +101,15 @@ add_test(NAME melee_hsd_tests COMMAND melee_hsd_tests)
 # exercised continuously rather than in one step at the end.  The two binaries
 # cannot be one: both implementations define HSD_ObjAlloc.
 #
-# Units that have moved: objalloc, class, object, list, id, fobj, and the
+# Units that have moved: objalloc, class, object, list, id, fobj, mtx, and the
 # three the rest depend on -- memory, which the allocator falls back on when
 # no arena is set, hash, which the class registry searches through, and
 # spline, which the animation interpreter evaluates its curves with.
+#
+# Aurora's matrix and vector implementations are linked in alongside: mtx.c
+# calls the SDK math, and Aurora macro-aliases the unprefixed MTX* spellings
+# onto its own C_MTX* definitions, so upstream resolves against them
+# unchanged.
 
 include(${MELEE_HSD_TESTS_ROOT}/cmake/MeleeUpstream.cmake)
 melee_upstream_available(MELEE_UPSTREAM_PRESENT)
@@ -114,6 +119,7 @@ if (NOT MELEE_UPSTREAM_PRESENT)
             "upstream conformance target "
             "(git submodule update --init --depth 1 extern/melee)")
 else ()
+    melee_aurora_math_sources(MELEE_AURORA_MATH)
     melee_upstream_sources(MELEE_UPSTREAM_UNITS
             sysdolphin/baselib/objalloc
             sysdolphin/baselib/class
@@ -121,6 +127,7 @@ else ()
             sysdolphin/baselib/list
             sysdolphin/baselib/id
             sysdolphin/baselib/fobj
+            sysdolphin/baselib/mtx
             sysdolphin/baselib/memory
             sysdolphin/baselib/hash
             sysdolphin/baselib/spline)
@@ -129,9 +136,11 @@ else ()
             ${CMAKE_CURRENT_LIST_DIR}/harness.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_core.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_fobj.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_mtx.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_objalloc.cpp
             ${CMAKE_CURRENT_LIST_DIR}/upstream_host.c
             ${MELEE_UPSTREAM_UNITS}
+            ${MELEE_AURORA_MATH}
     )
     target_include_directories(melee_hsd_upstream_tests PRIVATE
             ${CMAKE_CURRENT_LIST_DIR})

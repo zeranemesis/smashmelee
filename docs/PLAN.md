@@ -101,21 +101,43 @@ Two findings came out of getting it to run, and both change phase 2:
 **Objective.** Every symbol upstream references either exists or is
 deliberately stubbed, with the stub's consequence written down.
 
-Work, in descending order of leverage:
+The gap here is far smaller than the first measurement suggested, and the
+correction is worth stating plainly. That measurement counted a symbol as
+missing unless Aurora's `lib` sources *defined* it at column zero — which
+cannot see a macro. Aurora macro-aliases the unprefixed SDK spellings onto its
+own implementations (`#define MTXPerspective C_MTXPerspective`, `#define
+PSMTXIdentity MTXIdentity`), so 56 of the 61 are in fact reachable. **Five are
+genuinely absent from the headers:**
 
-| Group | Count | Nature |
-|---|---|---|
-| `MTX` projection and rotation helpers | 23 | Textbook matrices; write and unit-test them |
-| `OS` threads, alarms, interrupts, contexts | 21 | The real work of this phase — see below |
-| `VI` retrace callbacks and frame buffers | 7 | Bridge onto Aurora's swapchain and the 60 Hz clock |
-| `GX` (`GXSetMisc`, `GXWaitDrawDone`, `GXInitFogAdjTable`, `GXSetCopyClamp`, `GXSetTevClampMode`, `GXNtsc480IntDf`) | 6 | Aurora extensions or no-ops |
-| `DC`/`IC` cache operations | 3 | No-ops on a coherent host |
-| `PADSetSamplingRate`, `CARDFormatAsync`, `VIPadFrameBufferWidth`, PAD constants, `OSContext` fields | ~13 | Header-level gaps |
+| Symbol | Kind |
+|---|---|
+| `GXInitFogAdjTable` | fog table setup |
+| `GXNtsc480IntDf` | the NTSC render-mode object, data rather than a function |
+| `GXSetTevClampMode` | TEV state |
+| `GXWaitDrawDone` | draw synchronisation |
+| `PADSetSamplingRate` | controller polling rate |
 
-`GXSetArray` takes five arguments in Aurora where the console SDK takes
-three. The two extra are a size bound and a little-endian flag — Aurora's own
-answer to vertex byte order — so upstream's two call sites in `pobj.c` are
-adapted rather than worked around.
+Neither number is the last word: the first under-reported because of macros,
+and "declared in a header" is not "implemented in a library" — only a link
+settles it. For the **math** group it has been settled. Aurora's six matrix
+and vector units compile against their own headers with no further
+dependency, and together they resolve every one of the 22 math symbols
+`mtx`, `cobj`, `jobj`, `dobj`, `tobj`, `robj` and `lobj` reference. The 23
+helpers this plan expected to write did not need writing.
+
+What remains for this phase:
+
+- the five absent symbols above;
+- the `OS` thread, alarm, interrupt and context surface — declared by Aurora,
+  but this is where "declared" and "behaves like the console" diverge most,
+  and it is the real work of the phase;
+- `VI`'s retrace callbacks, bridged onto Aurora's swapchain and the 60 Hz
+  clock;
+- the `DC`/`IC` cache operations, which are no-ops on a coherent host;
+- `GXSetArray`, which takes five arguments in Aurora where the console SDK
+  takes three. The two extra are a size bound and a little-endian flag —
+  Aurora's own answer to vertex byte order — so upstream's two call sites in
+  `pobj.c` are adapted rather than worked around.
 
 **On `OS` threads.** Melee runs DVD and audio work on OS threads with alarms
 and interrupt masking. This repository already vendors `libco`; cooperative
@@ -126,8 +148,8 @@ simulation deterministic. Preemption is the wrong default here.
 **Done when** upstream's `sysdolphin/baselib` links with no unresolved
 symbol, and each stub is listed in a table with what it does not do.
 
-**Size.** Medium. A few hundred lines of shims, plus the threading model,
-which is the one genuinely design-sensitive piece.
+**Size.** Smaller than first estimated for the math, unchanged for the
+threading model, which is the one genuinely design-sensitive piece.
 
 ## Phase 2 — Swap the hand-written HSD for upstream's
 
@@ -148,8 +170,9 @@ which is the one genuinely design-sensitive piece.
 The suite already pins `objalloc`, `class`/`object`, `list`, `id`, `fobj`
 (twelve stream shapes) and `aobj` (seven playback modes) against upstream's
 own behavior, so most of this phase has its acceptance test written already.
-`objalloc`, `class`, `object`, `list`, `id` and `fobj` have moved, with
-`memory`, `hash` and `spline` behind them. Running them side by side found a
+`objalloc`, `class`, `object`, `list`, `id`, `fobj` and `mtx` have moved, with
+`memory`, `hash` and `spline` behind them and Aurora's matrix and vector
+implementations linked in alongside. Running them side by side found a
 real defect in the port's `ref_DEC`, which released a reference one call early
 whenever more than one was held, and established that the port's
 `hsdSearchClassInfo` is a host addition — upstream's reads a hash nothing
@@ -311,16 +334,15 @@ ever. A legally obtained disc image is a runtime input.
 
 Phase 0 is done. These are what follow.
 
-1. Write the 23 `MTX` helpers with unit tests (phase 1) — self-contained, and
-   it unblocks `cobj`.
-2. Decide the threading model and write it down (phase 1). Everything above
-   phase 1 inherits it.
-3. Key the HSD ID table on archive offsets rather than descriptor addresses
+1. Decide the threading model and write it down (phase 1). Everything above
+   phase 1 inherits it, and it is the only remaining design decision.
+2. Key the HSD ID table on archive offsets rather than descriptor addresses
    (phase 2) — nine of the sixteen pointer casts, and the port's `id` unit
    already uses 32-bit keys, so this is a decision more than a discovery.
-4. Write `HSD_Joint32b` and `byteswap_hsd_joint()`, and check it against
+3. Write `HSD_Joint32b` and `byteswap_hsd_joint()`, and check it against
    `HostScene`'s existing joint decode (phase 2) — the first converter, with
    its oracle already in the repository.
-5. Move `mtx` onto upstream's units in `melee_hsd_upstream_tests` (phase 2).
-   It is blocked on the `C_MTX*` and `C_VEC*` math Aurora implements but this
-   target does not link, which makes it the natural companion to action 1.
+4. Add the five absent SDK symbols (phase 1), which is a short, bounded task
+   now that the list is right.
+5. Move `tobj` and `lobj` onto upstream (phase 2) — both pointer-clean, and
+   both resolve against the math already linked.
