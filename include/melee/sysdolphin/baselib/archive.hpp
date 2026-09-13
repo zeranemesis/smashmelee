@@ -10,11 +10,13 @@
 
 namespace meleeboard::hsd {
 
+// Data-section offsets of a SceneDesc's four root arrays.  An absent array
+// reads back as Archive::kNullOffset, never as offset zero.
 struct SceneRoots {
-    uint32_t models = 0;
-    uint32_t cameras = 0;
-    uint32_t lights = 0;
-    uint32_t fogs = 0;
+    uint32_t models = UINT32_MAX;
+    uint32_t cameras = UINT32_MAX;
+    uint32_t lights = UINT32_MAX;
+    uint32_t fogs = UINT32_MAX;
 };
 
 // A read-only view of Melee's big-endian HSD DAT container.  Relocation is
@@ -37,12 +39,20 @@ public:
     bool contains_data_range(uint32_t data_offset, uint32_t byte_count) const;
     std::optional<uint8_t> data_byte(uint32_t data_offset) const;
     std::optional<uint32_t> data_word(uint32_t data_offset) const;
+    // The offset data_pointer() reports for a NULL field.  HSD stores NULL as
+    // a zero word that the loader leaves out of the relocation table, while a
+    // relocated zero addresses the first byte of the data section.  A host
+    // that keeps offsets rather than addresses must not conflate the two, so
+    // NULL gets a value no data section can contain.
+    static constexpr uint32_t kNullOffset = UINT32_MAX;
+
     // Reads an on-disc pointer field as an offset in the HSD data section.
     // A zero offset is valid when the field is listed in the relocation table:
     // the original HSD loader adds the data-section base to every relocation
     // field, including one whose stored value is zero.  A zero word outside
-    // the relocation table is a null pointer.  Non-null unrelocated values
-    // are not safe host data pointers and are rejected.
+    // the relocation table is a null pointer and reads back as kNullOffset.
+    // Non-null unrelocated values are not safe host data pointers and are
+    // rejected.
     std::optional<uint32_t> data_pointer(uint32_t field_offset) const;
     std::optional<float> data_float(uint32_t data_offset) const;
     std::optional<SceneRoots> scene_roots(std::string_view symbol) const;

@@ -1,0 +1,55 @@
+name: Melee HSD tests
+
+# The native HSD core compiles against headers only, so its regression suite
+# builds and runs in about a minute on both toolchains without Dawn, a GPU, or
+# a disc image.  Every porting change should go through it.
+
+on:
+  push:
+    branches:
+      - melee-port
+      - 'claude/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hsd-tests:
+    name: HSD tests (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The sanitized GCC job is the one that catches memory and undefined
+          # behavior in the HSD decoders; the others keep the port honest on
+          # the toolchains the shipping builds use.
+          - name: Linux GCC + sanitizers
+            os: ubuntu-latest
+            cmake_args: -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DMELEE_TESTS_SANITIZE=ON
+          - name: Linux Clang
+            os: ubuntu-latest
+            cmake_args: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          - name: Windows MSVC
+            os: windows-latest
+            cmake_args: ''
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+
+      - name: Fetch the Aurora headers
+        # Only Aurora's Dolphin SDK headers are needed; nothing is linked, so
+        # the heavy graphics submodules stay untouched.
+        run: git submodule update --init --depth 1 extern/aurora
+
+      - name: Configure
+        run: cmake -S tests/hsd -B build/hsd-tests -DCMAKE_BUILD_TYPE=RelWithDebInfo ${{ matrix.cmake_args }}
+
+      - name: Build
+        run: cmake --build build/hsd-tests --config RelWithDebInfo --parallel
+
+      - name: Run
+        run: ctest --test-dir build/hsd-tests --build-config RelWithDebInfo --output-on-failure

@@ -34,7 +34,7 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
 ### M1 — HSD core
 
 - [x] add a host-width-safe implementation of the HSD object allocator;
-- [x] verify alignment, allocation limits, statistics, and free-list reuse at boot;
+- [x] verify alignment, allocation limits, statistics, and free-list reuse;
 - [x] port the HSD root class/object model, inheritance lookup, lifetime counters,
       and reference counters;
 - [x] port a deterministic GObj process scheduler with priority ordering and
@@ -113,12 +113,48 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
 - [x] resolve the VS character-select model, camera, and `ANIM[3]` animation
       roots from `MnSelectChrDataTable` in `MnSlChr.usd` (173 model/animation
       joints, 201 draw objects and 4303 decoded triangles on GALE01 v1.02);
+- [x] distinguish a relocated pointer to data offset 0 from a NULL field.
+      HSD stores NULL as a zero word that the loader leaves out of the
+      relocation table, so on a host that keeps offsets instead of addresses
+      the two collide: every structure at the start of a data section was
+      being read as absent. `Archive::kNullOffset` now carries NULL, and the
+      head `HSD_PObjDesc` reads its vertex-descriptor and display-list fields
+      through `data_pointer` like the rest of the chain, instead of accepting
+      a raw console address as an offset;
 - import the upstream `Runtime`, `sysdolphin`, and required `melee/lb` headers/sources;
 - make pointer-width and endian assumptions explicit;
 - compile object/class allocation, GObj scheduling, VI, and GX initialization;
 - replace PowerPC-only assembly and cache operations at the platform boundary.
 
 Exit criterion: `HSD_InitComponent` completes on x86-64 without a crash.
+
+### Verification
+
+The HSD core compiles against headers only — no Aurora library, no GPU, no
+disc image — so its behavior is pinned down by an offline suite that builds
+and runs in about a second:
+
+```sh
+cmake -S tests/hsd -B build/hsd-tests
+cmake --build build/hsd-tests
+ctest --test-dir build/hsd-tests --output-on-failure
+```
+
+`-DMELEE_TESTS_SANITIZE=ON` adds the address and undefined-behavior
+sanitizers. The main build also produces the target unless
+`-DMELEE_BUILD_TESTS=OFF` is passed. CI runs the suite on GCC (sanitized),
+Clang, and MSVC for every push and pull request.
+
+The suite builds synthetic HSD DAT containers in the on-disc GameCube layout
+(`tests/hsd/dat_builder.*` and `tests/hsd/hsd_fixtures.*`) rather than
+shipping any Nintendo asset, so a decoder change that drifts from the format
+fails before it ever reaches a disc. Add a case there for every new structure
+the port learns to read.
+
+Reference behavior comes from `doldecomp/melee`; check a symbol against
+upstream before "fixing" a difference, because HSD has several APIs whose
+names do not describe what they do (`HSD_SListAppendList` splices after the
+head rather than walking to the tail, for instance).
 
 ### M2 — first scene
 

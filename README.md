@@ -25,6 +25,20 @@ The first porting milestone is implemented:
 
 This is not gameplay-ready yet. HSD integration has started; the next milestone is scene initialization, followed by Melee's scene system. See [docs/MELEE_PORT.md](docs/MELEE_PORT.md).
 
+## Tests
+
+The HSD core builds against headers alone, so its regression suite needs no
+GPU, no Aurora library, and no disc image:
+
+```sh
+cmake -S tests/hsd -B build/hsd-tests
+cmake --build build/hsd-tests
+ctest --test-dir build/hsd-tests --output-on-failure
+```
+
+It runs in CI on GCC (with sanitizers), Clang, and MSVC. Every change to the
+HSD decoders should come with a case there.
+
 ## Source reference
 
 The gameplay and HAL code reference is the upstream [`doldecomp/melee`](https://github.com/doldecomp/melee) project, targeting USA v1.02. Keep that source separate from proprietary disc contents.

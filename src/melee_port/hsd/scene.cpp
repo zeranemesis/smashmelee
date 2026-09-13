@@ -635,12 +635,15 @@ bool materialize_primitive(const Archive& archive, uint32_t primitive,
     object.display_list_count = static_cast<uint16_t>(*flags_and_display_count);
     object.display_list = *display_list;
     const uint32_t display_bytes = static_cast<uint32_t>(object.display_list_count) << 5;
-    if (!archive.contains_data_range(object.display_list, display_bytes)) {
+    if (object.display_list == Archive::kNullOffset
+            ? display_bytes != 0
+            : !archive.contains_data_range(object.display_list, display_bytes)) {
         error = "invalid HSD PObj display list";
         return false;
     }
-    bool terminated = object.vertex_description == 0;
-    for (uint32_t index = 0; object.vertex_description != 0 &&
+    bool terminated = object.vertex_description == Archive::kNullOffset;
+    for (uint32_t index = 0;
+         object.vertex_description != Archive::kNullOffset &&
          index < kMaxVertexDescriptors; ++index) {
         const uint32_t descriptor = object.vertex_description + index * kVertexDescriptorSize;
         const auto attribute = archive.data_word(descriptor);
@@ -721,8 +724,8 @@ bool read_camera(const Archive& archive, uint32_t description, HostCamera& camer
     const auto far_plane = archive.data_float(description + 0x2C);
     if (!flags_projection.has_value() || !eye_description.has_value() ||
         !interest_description.has_value() || !near_plane.has_value() ||
-        !far_plane.has_value() || *eye_description == 0 ||
-        *interest_description == 0 || *near_plane <= 0.0F ||
+        !far_plane.has_value() || *eye_description == Archive::kNullOffset ||
+        *interest_description == Archive::kNullOffset || *near_plane <= 0.0F ||
         *far_plane <= *near_plane) {
         return false;
     }
@@ -754,7 +757,7 @@ bool read_camera(const Archive& archive, uint32_t description, HostCamera& camer
 
     if (camera.flags & 1) {
         const auto up_vector = archive.data_pointer(description + 0x24);
-        if (up_vector.has_value() && *up_vector != 0 &&
+        if (up_vector.has_value() && *up_vector != Archive::kNullOffset &&
             !read_transform(archive, *up_vector, camera.up)) {
             return false;
         }
@@ -846,7 +849,7 @@ bool read_texture(const Archive& archive, uint32_t texture_description,
     const auto wrap_s = archive.data_word(texture_description + 0x34);
     const auto wrap_t = archive.data_word(texture_description + 0x38);
     if (!image_description.has_value() || !wrap_s.has_value() ||
-        !wrap_t.has_value() || *image_description == 0) {
+        !wrap_t.has_value() || *image_description == Archive::kNullOffset) {
         return false;
     }
     const auto image_data = archive.data_pointer(*image_description);
@@ -885,7 +888,8 @@ bool read_texture(const Archive& archive, uint32_t texture_description,
     if (paletted_texture_format(*format)) {
         const auto palette_description =
             archive.data_pointer(texture_description + 0x50);
-        if (!palette_description.has_value() || *palette_description == 0) {
+        if (!palette_description.has_value() ||
+            *palette_description == Archive::kNullOffset) {
             return false;
         }
         const auto palette_data = archive.data_pointer(*palette_description);
@@ -988,14 +992,14 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
         }
 
         // SceneCameraDesc is { HSD_CObjDesc* desc, HSD_CameraAnim** anims }.
-        if (scene->cameras != 0) {
+        if (scene->cameras != Archive::kNullOffset) {
         for (uint32_t index = 0; index < kMaxSceneCameras; ++index) {
             const uint32_t entry = scene->cameras + index * 8;
             const auto camera_description = archive.data_pointer(entry);
             if (!camera_description.has_value()) {
                 return false;
             }
-            if (*camera_description == 0) {
+            if (*camera_description == Archive::kNullOffset) {
                 break;
             }
             HostCamera camera{};
@@ -1025,7 +1029,7 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
     last_error_ = "could not build HSD joint hierarchy";
     std::vector<uint32_t> pending;
     for (uint32_t root : model_roots_) {
-        if (root != 0) pending.push_back(root);
+        if (root != Archive::kNullOffset) pending.push_back(root);
     }
 
     std::unordered_map<uint32_t, uint32_t> joint_indices;
@@ -1057,10 +1061,10 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
 
         joint_indices.emplace(offset, static_cast<uint32_t>(joints_.size()));
         joints_.push_back(joint);
-        if (*child != 0) {
+        if (*child != Archive::kNullOffset) {
             pending.push_back(*child);
         }
-        if (*sibling != 0) {
+        if (*sibling != Archive::kNullOffset) {
             pending.push_back(*sibling);
         }
     }
@@ -1072,14 +1076,14 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
         if (!child.has_value() || !sibling.has_value()) {
             return false;
         }
-        if (*child != 0) {
+        if (*child != Archive::kNullOffset) {
             const auto iterator = joint_indices.find(*child);
             if (iterator == joint_indices.end()) {
                 return false;
             }
             joint.child = static_cast<int32_t>(iterator->second);
         }
-        if (*sibling != 0) {
+        if (*sibling != Archive::kNullOffset) {
             const auto iterator = joint_indices.find(*sibling);
             if (iterator == joint_indices.end()) {
                 return false;
@@ -1100,7 +1104,7 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
         uint32_t description = *first;
         std::unordered_set<uint32_t> chain;
         int32_t previous_draw_object = -1;
-        while (description != 0) {
+        while (description != Archive::kNullOffset) {
             if (!chain.insert(description).second ||
                 draw_objects_.size() >= kMaxSceneDrawObjects) {
                 return false;
@@ -1118,7 +1122,7 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
             object.material_description = *material;
             object.primitive_description = *primitive;
 
-            if (*material != 0) {
+            if (*material != Archive::kNullOffset) {
                 const auto render_mode = archive.data_word(*material + 0x04);
                 const auto texture_description =
                     archive.data_pointer(*material + 0x08);
@@ -1131,7 +1135,7 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
                 object.render_mode = *render_mode;
                 object.texture_description = *texture_description;
                 object.material = *material_data;
-                if (*material_data != 0) {
+                if (*material_data != Archive::kNullOffset) {
                     const auto existing = material_indices.find(*material);
                     if (existing != material_indices.end()) {
                         object.material_index = existing->second;
@@ -1143,7 +1147,7 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
                                 static_cast<int32_t>(materials_.size());
                             material_indices.emplace(*material,
                                                      object.material_index);
-                            if (*texture_description != 0) {
+                            if (*texture_description != Archive::kNullOffset) {
                                 const auto texture = texture_indices.find(*texture_description);
                                 if (texture != texture_indices.end()) {
                                     host_material.texture_index = texture->second;
@@ -1165,12 +1169,15 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
                 }
             }
 
-            if (*primitive != 0) {
+            if (*primitive != Archive::kNullOffset) {
+                // Both fields are relocated GameCube pointers; reading them
+                // as raw words would accept a console address as an offset.
                 const auto vertex_description =
-                    archive.data_word(*primitive + 0x08);
+                    archive.data_pointer(*primitive + 0x08);
                 const auto flags_and_display_count =
                     archive.data_word(*primitive + 0x0C);
-                const auto display_list = archive.data_word(*primitive + 0x10);
+                const auto display_list =
+                    archive.data_pointer(*primitive + 0x10);
                 if (!vertex_description.has_value() ||
                     !flags_and_display_count.has_value() ||
                     !display_list.has_value()) {
@@ -1185,14 +1192,17 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
 
                 const uint32_t display_bytes =
                     static_cast<uint32_t>(object.display_list_count) << 5;
-                if (!archive.contains_data_range(object.display_list,
-                                                 display_bytes)) {
+                if (object.display_list == Archive::kNullOffset
+                        ? display_bytes != 0
+                        : !archive.contains_data_range(object.display_list,
+                                                       display_bytes)) {
                     return false;
                 }
 
-                bool descriptors_terminated = object.vertex_description == 0;
+                bool descriptors_terminated =
+                    object.vertex_description == Archive::kNullOffset;
                 for (uint32_t index = 0;
-                     object.vertex_description != 0 &&
+                     object.vertex_description != Archive::kNullOffset &&
                      index < kMaxVertexDescriptors; ++index) {
                     const uint32_t descriptor = object.vertex_description +
                         index * kVertexDescriptorSize;
@@ -1293,7 +1303,7 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
             // later PObj (as happens in standScene).
             uint32_t primitive_link = *primitive;
             std::unordered_set<uint32_t> primitive_chain;
-            while (primitive_link != 0) {
+            while (primitive_link != Archive::kNullOffset) {
                 if (!primitive_chain.insert(primitive_link).second) {
                     last_error_ = "cyclic HSD PObjDesc chain";
                     return false;
@@ -1304,7 +1314,7 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
                     return false;
                 }
                 primitive_link = *primitive_next;
-                if (primitive_link == 0) {
+                if (primitive_link == Archive::kNullOffset) {
                     break;
                 }
                 if (draw_objects_.size() >= kMaxSceneDrawObjects) {
@@ -1335,8 +1345,7 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
 
     last_error_ = "could not resolve HSD model roots";
     for (uint32_t& root : model_roots_) {
-        if (root == 0) {
-            root = UINT32_MAX;
+        if (root == Archive::kNullOffset) {
             continue;
         }
         const auto iterator = joint_indices.find(root);
