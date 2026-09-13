@@ -7,6 +7,7 @@
 #include <melee/sysdolphin/baselib/archive.hpp>
 
 #include <array>
+#include <string>
 #include <vector>
 
 using meleeboard::hsd::Archive;
@@ -339,4 +340,33 @@ MELEE_TEST(Scene, LoadsAJointTreeFromARelocatedOffset)
     CHECK(!out_of_range.load_joint_at(archive, archive.data_size()));
     HostScene missing_symbol;
     CHECK(!missing_symbol.load_joint(archive, "absent_joint"));
+}
+
+MELEE_TEST(Scene, ReportsTheOffendingPrimitiveOnAnUnsupportedStream)
+{
+    // A direct-addressed position attribute is not something the host stream
+    // decoder can resolve.  The head of a PObj chain and the entries behind it
+    // share one decoder, so both report the PObj and its descriptor layout.
+    DatBuilder builder;
+    const uint32_t positions = fixtures::add_float_positions(
+        builder, { kTriangle.begin(), kTriangle.end() });
+    const uint32_t descriptors = fixtures::add_position_descriptor(
+        builder, positions, 12, fixtures::kAddressDirect);
+    uint16_t length = 0;
+    const uint32_t list = fixtures::add_indexed_display_list(
+        builder, fixtures::kOpTriangles, { 0, 1, 2 }, length);
+    const uint32_t primitive =
+        fixtures::add_primitive(builder, descriptors, list, length);
+    const uint32_t draw_object = fixtures::add_draw_object(builder, 0, primitive);
+    const uint32_t root = fixtures::add_joint(builder);
+    fixtures::set_joint_draw_object(builder, root, draw_object);
+    builder.symbol("model_joint", root);
+
+    Archive archive;
+    REQUIRE(archive.parse(builder.build()));
+    HostScene scene;
+    CHECK(!scene.load_joint(archive, "model_joint"));
+    CHECK(scene.last_error().find("unsupported GX stream at PObj " +
+                                  std::to_string(primitive)) == 0);
+    CHECK(scene.last_error().find("[a=9 t=1") != std::string::npos);
 }

@@ -664,8 +664,21 @@ bool materialize_primitive(const Archive& archive, uint32_t primitive,
             .fraction = static_cast<uint8_t>(*fraction_stride >> 24),
         });
     }
-    if (!terminated || !parse_display_list(archive, object)) {
-        error = "unsupported or malformed GX display stream";
+    if (!terminated) {
+        error = "unterminated HSD vertex descriptor list at PObj " +
+            std::to_string(primitive);
+        return false;
+    }
+    if (!parse_display_list(archive, object)) {
+        error = "unsupported GX stream at PObj " + std::to_string(primitive) +
+            " descriptors";
+        for (const HostVertexDescriptor& descriptor : object.vertex_descriptors) {
+            error += " [a=" + std::to_string(descriptor.attribute) +
+                " t=" + std::to_string(descriptor.attribute_type) +
+                " c=" + std::to_string(descriptor.component_count) +
+                " f=" + std::to_string(descriptor.component_type) +
+                " s=" + std::to_string(descriptor.stride) + "]";
+        }
         return false;
     }
     std::string position_error;
@@ -1170,120 +1183,11 @@ bool HostScene::load_internal(const Archive& archive, std::string_view symbol,
             }
 
             if (*primitive != Archive::kNullOffset) {
-                // Both fields are relocated GameCube pointers; reading them
-                // as raw words would accept a console address as an offset.
-                const auto vertex_description =
-                    archive.data_pointer(*primitive + 0x08);
-                const auto flags_and_display_count =
-                    archive.data_word(*primitive + 0x0C);
-                const auto display_list =
-                    archive.data_pointer(*primitive + 0x10);
-                if (!vertex_description.has_value() ||
-                    !flags_and_display_count.has_value() ||
-                    !display_list.has_value()) {
+                std::string primitive_error;
+                if (!materialize_primitive(archive, *primitive, object,
+                                           primitive_error)) {
+                    last_error_ = std::move(primitive_error);
                     return false;
-                }
-                object.vertex_description = *vertex_description;
-                object.primitive_flags =
-                    static_cast<uint16_t>(*flags_and_display_count >> 16);
-                object.display_list_count =
-                    static_cast<uint16_t>(*flags_and_display_count);
-                object.display_list = *display_list;
-
-                const uint32_t display_bytes =
-                    static_cast<uint32_t>(object.display_list_count) << 5;
-                if (object.display_list == Archive::kNullOffset
-                        ? display_bytes != 0
-                        : !archive.contains_data_range(object.display_list,
-                                                       display_bytes)) {
-                    return false;
-                }
-
-                bool descriptors_terminated =
-                    object.vertex_description == Archive::kNullOffset;
-                for (uint32_t index = 0;
-                     object.vertex_description != Archive::kNullOffset &&
-                     index < kMaxVertexDescriptors; ++index) {
-                    const uint32_t descriptor = object.vertex_description +
-                        index * kVertexDescriptorSize;
-                    const auto attribute = archive.data_word(descriptor);
-                    if (!attribute.has_value()) {
-                        return false;
-                    }
-                    if (*attribute == kGxVertexAttributeNull) {
-                        descriptors_terminated = true;
-                        break;
-                    }
-                    const auto attribute_type =
-                        archive.data_word(descriptor + 0x04);
-                    const auto component_count =
-                        archive.data_word(descriptor + 0x08);
-                    const auto component_type =
-                        archive.data_word(descriptor + 0x0C);
-                    const auto fraction_and_stride =
-                        archive.data_word(descriptor + 0x10);
-                    const auto vertex_data =
-                        archive.data_pointer(descriptor + 0x14);
-                    if (!attribute_type.has_value() ||
-                        !component_count.has_value() ||
-                        !component_type.has_value() ||
-                        !fraction_and_stride.has_value() ||
-                        !vertex_data.has_value()) {
-                        return false;
-                    }
-                    object.vertex_descriptors.push_back({
-                        .attribute = *attribute,
-                        .attribute_type = *attribute_type,
-                        .component_count = *component_count,
-                        .component_type = *component_type,
-                        .vertex_data = *vertex_data,
-                        // HSD_VtxDescList has a u8 fraction followed by the
-                        // compiler's alignment padding and a big-endian u16
-                        // stride.  The stride is consequently the low word
-                        // returned by Archive::data_word.
-                        .stride = static_cast<uint16_t>(*fraction_and_stride),
-                        .fraction = static_cast<uint8_t>(
-                            *fraction_and_stride >> 24),
-                    });
-                }
-                if (!descriptors_terminated) {
-                    return false;
-                }
-                if (!parse_display_list(archive, object)) {
-                    last_error_ = "unsupported GX stream at PObj " +
-                        std::to_string(*primitive) + " descriptors";
-                    for (const HostVertexDescriptor& descriptor :
-                         object.vertex_descriptors) {
-                        last_error_ += " [a=" + std::to_string(descriptor.attribute) +
-                            " t=" + std::to_string(descriptor.attribute_type) +
-                            " c=" + std::to_string(descriptor.component_count) +
-                            " f=" + std::to_string(descriptor.component_type) +
-                            " s=" + std::to_string(descriptor.stride) + "]";
-                    }
-                    return false;
-                }
-                std::string position_error;
-                if (materialize_positions(archive, object, position_error)) {
-                    object.position_stream_decoded = true;
-                } else {
-                    object.position_decode_error = std::move(position_error);
-                    // An individual legacy vertex layout must not prevent the
-                    // rest of a scene from loading.  The host renderer can
-                    // skip this object until its layout is implemented.
-                    object.positions.clear();
-                    object.triangle_indices.clear();
-                }
-                std::string normal_error;
-                if (!materialize_normals(archive, object, normal_error)) {
-                    object.normals.clear();
-                    std::fill(object.triangle_normal_indices.begin(),
-                              object.triangle_normal_indices.end(), UINT32_MAX);
-                }
-                std::string texcoord_error;
-                if (!materialize_texcoords(archive, object, texcoord_error)) {
-                    object.texcoords.clear();
-                    std::fill(object.triangle_texcoord_indices.begin(),
-                              object.triangle_texcoord_indices.end(), UINT32_MAX);
                 }
             }
             const int32_t object_index =

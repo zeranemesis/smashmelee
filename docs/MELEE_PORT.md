@@ -121,6 +121,9 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       head `HSD_PObjDesc` reads its vertex-descriptor and display-list fields
       through `data_pointer` like the rest of the chain, instead of accepting
       a raw console address as an offset;
+- [x] decode the head of an `HSD_PObjDesc` chain through the same routine as
+      the entries behind it; two independent copies of that decoder are how
+      the head came to read its pointer fields differently in the first place;
 - [x] initialize the HSD object pools explicitly in `HSD_ObjInit` order
       instead of as a side effect of boot-time self-tests, and move that
       verification into the offline suite (see below);
