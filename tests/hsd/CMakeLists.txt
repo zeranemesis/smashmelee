@@ -101,9 +101,10 @@ add_test(NAME melee_hsd_tests COMMAND melee_hsd_tests)
 # exercised continuously rather than in one step at the end.  The two binaries
 # cannot be one: both implementations define HSD_ObjAlloc.
 #
-# Units that have moved: objalloc, class, object, list, id, and the two the
-# rest depend on -- memory, which the allocator falls back on when no arena is
-# set, and hash, which the class registry searches through.
+# Units that have moved: objalloc, class, object, list, id, fobj, and the
+# three the rest depend on -- memory, which the allocator falls back on when
+# no arena is set, hash, which the class registry searches through, and
+# spline, which the animation interpreter evaluates its curves with.
 
 include(${MELEE_HSD_TESTS_ROOT}/cmake/MeleeUpstream.cmake)
 melee_upstream_available(MELEE_UPSTREAM_PRESENT)
@@ -119,12 +120,15 @@ else ()
             sysdolphin/baselib/object
             sysdolphin/baselib/list
             sysdolphin/baselib/id
+            sysdolphin/baselib/fobj
             sysdolphin/baselib/memory
-            sysdolphin/baselib/hash)
+            sysdolphin/baselib/hash
+            sysdolphin/baselib/spline)
 
     add_executable(melee_hsd_upstream_tests
             ${CMAKE_CURRENT_LIST_DIR}/harness.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_core.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_fobj.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_objalloc.cpp
             ${CMAKE_CURRENT_LIST_DIR}/upstream_host.c
             ${MELEE_UPSTREAM_UNITS}

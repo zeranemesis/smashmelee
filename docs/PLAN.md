@@ -148,11 +148,14 @@ which is the one genuinely design-sensitive piece.
 The suite already pins `objalloc`, `class`/`object`, `list`, `id`, `fobj`
 (twelve stream shapes) and `aobj` (seven playback modes) against upstream's
 own behavior, so most of this phase has its acceptance test written already.
-`objalloc`, `class`, `object`, `list` and `id` have moved; running them side
-by side found a real defect in the port's `ref_DEC`, which released a
-reference one call early whenever more than one was held, and established
-that the port's `hsdSearchClassInfo` is a host addition — upstream's reads a
-hash nothing populates and always answers NULL.
+`objalloc`, `class`, `object`, `list`, `id` and `fobj` have moved, with
+`memory`, `hash` and `spline` behind them. Running them side by side found a
+real defect in the port's `ref_DEC`, which released a reference one call early
+whenever more than one was held, and established that the port's
+`hsdSearchClassInfo` is a host addition — upstream's reads a hash nothing
+populates and always answers NULL. `fobj` carries the twelve-stream table,
+now asserted against both interpreters, so the encoding bug that started this
+cannot come back.
 
 ### What the pointer work actually is
 
@@ -318,7 +321,6 @@ Phase 0 is done. These are what follow.
 4. Write `HSD_Joint32b` and `byteswap_hsd_joint()`, and check it against
    `HostScene`'s existing joint decode (phase 2) — the first converter, with
    its oracle already in the repository.
-5. Move `mtx` and `fobj` onto upstream's units in
-   `melee_hsd_upstream_tests` (phase 2). `class`, `object`, `list` and `id`
-   are already there; `fobj` carries the twelve-stream differential table,
-   which makes it the strongest remaining acceptance test.
+5. Move `mtx` onto upstream's units in `melee_hsd_upstream_tests` (phase 2).
+   It is blocked on the `C_MTX*` and `C_VEC*` math Aurora implements but this
+   target does not link, which makes it the natural companion to action 1.
