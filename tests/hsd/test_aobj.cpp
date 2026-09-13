@@ -16,7 +16,8 @@ void record(void*, uint32_t, HSD_ObjData* value)
     gValues->push_back(value->fv);
 }
 
-constexpr uint8_t kTwoKeyPack = 0x10;
+// One byte carries both: low nibble opcode, bits 4-6 key count - 1.
+constexpr uint8_t kTwoKeys = 0x10;
 
 } // namespace
 
@@ -56,7 +57,7 @@ MELEE_TEST(AObj, HoldsTheFirstFrameBeforeAdvancing)
     HSD_AObjInitAllocData();
     HSD_FObjInitAllocData();
 
-    uint8_t stream[] = { HSD_A_OP_LIN, kTwoKeyPack, 0, 2, 4, 1 };
+    uint8_t stream[] = { kTwoKeys | HSD_A_OP_LIN, 0, 2, 4, 1 };
     HSD_AObj* animation = HSD_AObjAlloc();
     HSD_FObj* channel = HSD_FObjAlloc();
     REQUIRE(animation != nullptr);
@@ -93,7 +94,7 @@ MELEE_TEST(AObj, RewindsALoopedAnimation)
     HSD_FObj* channel = HSD_FObjAlloc();
     REQUIRE(animation != nullptr);
     REQUIRE(channel != nullptr);
-    static uint8_t stream[] = { HSD_A_OP_CON, kTwoKeyPack, 1, 1, 2, 1 };
+    static uint8_t stream[] = { kTwoKeys | HSD_A_OP_CON, 1, 1, 2, 1 };
     channel->ad_head = stream;
     channel->length = sizeof(stream);
     channel->frac_value = HSD_A_FRAC_U8;
@@ -124,7 +125,7 @@ MELEE_TEST(AObj, StopsAtTheEndFrameWithoutLooping)
     HSD_FObj* channel = HSD_FObjAlloc();
     REQUIRE(animation != nullptr);
     REQUIRE(channel != nullptr);
-    static uint8_t stream[] = { HSD_A_OP_CON, kTwoKeyPack, 1, 1, 2, 1 };
+    static uint8_t stream[] = { kTwoKeys | HSD_A_OP_CON, 1, 1, 2, 1 };
     channel->ad_head = stream;
     channel->length = sizeof(stream);
     channel->frac_value = HSD_A_FRAC_U8;

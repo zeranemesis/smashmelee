@@ -24,7 +24,8 @@ namespace {
 
 constexpr uint8_t kTranslationX = 5;
 constexpr uint8_t kVisibility = 11;
-constexpr uint8_t kTwoKeyPack = 0x10;
+// One byte carries both: low nibble opcode, bits 4-6 key count - 1.
+constexpr uint8_t kTwoKeys = 0x10;
 constexpr uint32_t kJointHidden = 1U << 4;
 
 // A single joint whose X translation holds 7 and then 9.
@@ -32,7 +33,7 @@ uint32_t add_translation_animation(DatBuilder& builder)
 {
     const uint32_t channel = fixtures::add_anim_channel(
         builder, kTranslationX, HSD_A_FRAC_U8, HSD_A_FRAC_U8, 0.0F,
-        { HSD_A_OP_CON, kTwoKeyPack, 7, 1, 9, 1 });
+        { kTwoKeys | HSD_A_OP_CON, 7, 1, 9, 1 });
     const uint32_t object =
         fixtures::add_anim_object(builder, AOBJ_LOOP, 20.0F, channel);
     const uint32_t joint = fixtures::add_anim_joint(builder);
@@ -160,7 +161,7 @@ MELEE_TEST(AnimationPlayer, AddressesSubtreesInPreOrder)
     const auto add_channel = [&builder](uint8_t value) {
         return fixtures::add_anim_channel(
             builder, kTranslationX, HSD_A_FRAC_U8, HSD_A_FRAC_U8, 0.0F,
-            { HSD_A_OP_CON, kTwoKeyPack, value,
+            { kTwoKeys | HSD_A_OP_CON, value,
               static_cast<uint8_t>(1), static_cast<uint8_t>(value + 1),
               static_cast<uint8_t>(1) });
     };
@@ -214,7 +215,7 @@ MELEE_TEST(AnimationPlayer, AppliesVisibilityChannels)
     // A visibility channel that starts hidden (0) and then becomes visible (1).
     const uint32_t channel = fixtures::add_anim_channel(
         builder, kVisibility, HSD_A_FRAC_U8, HSD_A_FRAC_U8, 0.0F,
-        { HSD_A_OP_CON, kTwoKeyPack, 0, 1, 1, 1 });
+        { kTwoKeys | HSD_A_OP_CON, 0, 1, 1, 1 });
     const uint32_t object = fixtures::add_anim_object(builder, 0, 20.0F, channel);
     const uint32_t joint = fixtures::add_anim_joint(builder);
     fixtures::set_anim_joint_object(builder, joint, object);

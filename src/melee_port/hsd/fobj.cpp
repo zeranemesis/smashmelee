@@ -31,6 +31,22 @@ bool read_byte(HSD_FObj* fobj, uint8_t* value)
     return true;
 }
 
+// The opcode shares its byte with the key count, so reading it must not
+// advance the cursor; parseOpCode in sysdolphin/baselib/fobj.c peeks too.
+bool peek_byte(const HSD_FObj* fobj, uint8_t* value)
+{
+    if (!has_bytes(fobj, 1)) {
+        return false;
+    }
+    *value = *fobj->ad;
+    return true;
+}
+
+bool at_end_of_stream(const HSD_FObj* fobj)
+{
+    return !has_bytes(fobj, 1);
+}
+
 bool read_value(HSD_FObj* fobj, uint8_t fraction, float* value)
 {
     const uint8_t encoding = fraction & 0xE0U;
@@ -184,9 +200,12 @@ bool load_data(HSD_FObj* fobj, uint32_t* state)
     }
     fobj->op_intrp = fobj->op;
     if (fobj->nb_pack == 0) {
+        // One byte carries both: the low nibble is the opcode, bits 4-6 the
+        // key count minus one, and bit 7 continues the count into the bytes
+        // that follow.  read_pack_count consumes the byte peeked here.
         uint8_t op = 0;
         uint32_t pack_count = 0;
-        if (!read_byte(fobj, &op) || !read_pack_count(fobj, &pack_count) ||
+        if (!peek_byte(fobj, &op) || !read_pack_count(fobj, &pack_count) ||
             pack_count > std::numeric_limits<uint16_t>::max()) {
             return false;
         }
@@ -248,6 +267,32 @@ bool load_data(HSD_FObj* fobj, uint32_t* state)
     }
     *state = previous_state == 1 ? 3 : 4;
     return true;
+}
+
+// Mirrors FObjLaunchKeyData: a key whose value was loaded but not yet
+// published becomes the current one when the stream ends.
+void launch_key_data(HSD_FObj* fobj)
+{
+    if ((fobj->flags & kKeyPending) != 0) {
+        fobj->op_intrp = fobj->op;
+        fobj->flags = static_cast<uint8_t>((fobj->flags & ~kKeyPending) |
+                                            kKeyReady);
+        fobj->p0 = fobj->p1;
+    }
+}
+
+// Mirrors FObjLoadWait: reaching the end of the stream is the terminal state,
+// not an error, and it must be detected before a wait is parsed.
+uint32_t load_wait(HSD_FObj* fobj)
+{
+    if (at_end_of_stream(fobj)) {
+        return 6;
+    }
+    if (!read_wait(fobj, &fobj->fterm)) {
+        return 0;
+    }
+    fobj->flags |= kNewSegment;
+    return 2;
 }
 
 void request_animation(HSD_FObj* fobj, float startframe)
@@ -340,16 +385,14 @@ extern "C" void HSD_FObjInterpretAnim(HSD_FObj* fobj, void* object,
         return;
     }
     uint32_t state = HSD_FObjGetState(fobj);
+    // The segment length carried out of the last completed key, which the
+    // terminal state adds back; fobj->fterm has moved on by then.
+    float carried_term = 0.0F;
     for (uint32_t steps = 0; steps < 1024; ++steps) {
         switch (state) {
         case 6:
-            fobj->time += fobj->fterm;
-            if ((fobj->flags & kKeyPending) != 0) {
-                fobj->op_intrp = fobj->op;
-                fobj->flags = static_cast<uint8_t>((fobj->flags & ~kKeyPending) |
-                                                    kKeyReady);
-                fobj->p0 = fobj->p1;
-            }
+            fobj->time += carried_term;
+            launch_key_data(fobj);
             update_value(fobj, object, update_function);
             return;
         case 1:
@@ -358,22 +401,30 @@ extern "C" void HSD_FObjInterpretAnim(HSD_FObj* fobj, void* object,
                 HSD_FObjSetState(fobj, 0);
                 return;
             }
-            HSD_FObjSetState(fobj, state);
+            // Reaching the end of the stream does not store a state upstream:
+            // FObjLoadData returns 6 directly, leaving the last state the key
+            // loaders set, so a later tick re-enters through it and keeps
+            // publishing the final value.
+            if (state != 6) {
+                HSD_FObjSetState(fobj, state);
+            }
             break;
         case 3:
             if ((fobj->flags & kKeyReady) != 0) {
                 update_value(fobj, object, update_function);
             }
-            if (!read_wait(fobj, &fobj->fterm)) {
+            state = load_wait(fobj);
+            if (state == 0) {
                 HSD_FObjSetState(fobj, 0);
                 return;
             }
-            fobj->flags |= kNewSegment;
-            state = 2;
-            HSD_FObjSetState(fobj, state);
+            if (state != 6) {
+                HSD_FObjSetState(fobj, state);
+            }
             break;
         case 4:
             if (fobj->fterm <= fobj->time) {
+                carried_term = static_cast<float>(fobj->fterm);
                 fobj->time -= fobj->fterm;
                 state = 3;
                 HSD_FObjSetState(fobj, state);

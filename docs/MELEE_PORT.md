@@ -121,6 +121,12 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       head `HSD_PObjDesc` reads its vertex-descriptor and display-list fields
       through `data_pointer` like the rest of the chain, instead of accepting
       a raw console address as an offset;
+- [x] read an animation opcode and its key count from the one byte HSD packs
+      them into, matching `parseOpCode`/`parsePackInfo`; the interpreter was
+      consuming two, so every real FObj stream decoded a byte out of step.
+      The host interpreter now agrees with upstream's on every value across
+      twelve stream shapes, regenerable with
+      `tools/upstream_native_spike.py --fobj-reference`;
 - [x] decode the head of an `HSD_PObjDesc` chain through the same routine as
       the entries behind it; two independent copies of that decoder are how
       the head came to read its pointer fields differently in the first place;

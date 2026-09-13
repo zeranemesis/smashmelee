@@ -88,6 +88,36 @@ One caveat on the Aurora figure: it is derived by scanning Aurora's sources
 for function definitions, so it counts what is written, not what is verified
 to behave like the console.
 
+## Running upstream, and what it found
+
+Upstream's HSD core does not merely compile: it runs. Built against Aurora's
+Dolphin headers with `TARGET_PC` — which is what gives `u32` its host-correct
+32-bit width; upstream's own headers declare it `unsigned long`, so every
+structure doubles its integer fields on LP64 — nine translation units
+(`objalloc`, `list`, `id`, `fobj`, `class`, `object`, `memory`, `hash`,
+`spline`) link against exactly six host shims: `OSAllocFromHeap`,
+`OSFreeToHeap`, `OSCheckHeap`, `OSReport`, `HSD_GetHeap`, and `__assert`.
+
+Running the port's own assertions against that binary found a real defect in
+this port. HSD packs an animation opcode and its key count into **one** byte —
+`parseOpCode` peeks the low nibble without advancing, and `parsePackInfo`
+then consumes the same byte for the count. The port was reading two separate
+bytes, so every real animation stream decoded one byte out of step. Two
+smaller divergences came out of the same comparison: the terminal state adds
+back the segment length saved when a key rolled over rather than the length
+parsed since, and reaching the end of a stream while loading a wait is the
+terminal state rather than an error.
+
+With those corrected, the two interpreters agree on every value across
+twelve stream shapes — constant, linear, both spline forms, slope, key,
+multi-byte waits, mixed packs, and three fraction encodings — and on the
+state left behind. `--fobj-reference` regenerates that table, and
+`tests/hsd/test_fobj.cpp` asserts it.
+
+This is the argument for the compiled-upstream path stated as a fact rather
+than a preference: a hand-written HSD is a second implementation that can be
+wrong in ways nothing detects until a real asset looks subtly off.
+
 ## What this does and does not show
 
 It shows that the decompiled game's **types, headers, and declarations**

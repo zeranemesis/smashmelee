@@ -19,9 +19,10 @@ namespace {
 
 // HSD_A_J_TRAX: the joint translation channel on the X axis.
 constexpr uint8_t kTranslationX = 5;
-constexpr uint8_t kTwoKeyPack = 0x10;
+// One byte carries both: low nibble opcode, bits 4-6 key count - 1.
+constexpr uint8_t kTwoKeys = 0x10;
 
-const std::vector<uint8_t> kConstantSeven{ HSD_A_OP_CON, kTwoKeyPack,
+const std::vector<uint8_t> kConstantSeven{ kTwoKeys | HSD_A_OP_CON,
                                            7, 1, 9, 1 };
 
 } // namespace
