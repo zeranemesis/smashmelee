@@ -170,8 +170,9 @@ threading model, which is the one genuinely design-sensitive piece.
 The suite already pins `objalloc`, `class`/`object`, `list`, `id`, `fobj`
 (twelve stream shapes) and `aobj` (seven playback modes) against upstream's
 own behavior, so most of this phase has its acceptance test written already.
-`objalloc`, `class`, `object`, `list`, `id`, `fobj` and `mtx` have moved, with
-`memory`, `hash` and `spline` behind them and Aurora's matrix and vector
+Fifteen units have moved: `objalloc`, `class`, `object`, `list`, `id`, `fobj`,
+`aobj`, `mtx`, `archive`, `util`, `random` and `quatlib`, with `memory`,
+`hash` and `spline` behind them and Aurora's matrix and vector
 implementations linked in alongside. Running them side by side found a
 real defect in the port's `ref_DEC`, which released a reference one call early
 whenever more than one was held, and established that the port's
@@ -197,6 +198,37 @@ depends on there are 16, in 6 units**, and they fall into three patterns:
 | Pool arena | 7 (`objalloc`) | Avoided entirely by leaving `HSD_ObjSetHeap` unset, as phase 0 found. |
 
 Twenty of the 27 core units are completely pointer-clean, `jobj` included.
+
+### The gate the rest of the layer waits on
+
+The remaining units divide cleanly, and the division is not the one the
+pointer inventory suggests:
+
+| Unit | GX symbols | Why it is not here yet |
+|---|---|---|
+| `jobj` | 0 | GX-free itself, but calls into `tobj`, `pobj` and `texp` to display |
+| `dobj`, `mobj` | 0 | travel with `jobj` |
+| `robj` | 0 | GX-free, but reaches deep into `jobj` |
+| `wobj` | 0 | drives `robj` |
+| `cobj` | 4 | |
+| `texp` | 3 | |
+| `lobj` | 7 | |
+| `state` | 11 | |
+| `tobj` | 13 | |
+| `shadow` | 14 | |
+| `tev` | 16 | |
+
+All of them compile. **Sixty-one GX functions** stand between this target and
+the whole scene-object layer linking, and that is the next real gate rather
+than the pointer casts. A GX stub that *records* its calls rather than
+drawing would clear it and double as the harness phase 3 needs for golden
+frames, so it is worth building once, properly.
+
+One more thing is now asserted rather than assumed: upstream's
+`HSD_ArchiveParse` refuses a big-endian container on a little-endian host —
+it compares the file size it reads against the one it was given, and reports
+`byte-order mismatch` in its own words. That is the converters' justification
+coming from upstream's code rather than from this document.
 
 **Done when** no file remains under `src/melee_port/hsd/`, and all 61 cases
 plus whatever the swap adds are green on three toolchains.
@@ -344,5 +376,5 @@ Phase 0 is done. These are what follow.
    its oracle already in the repository.
 4. Add the five absent SDK symbols (phase 1), which is a short, bounded task
    now that the list is right.
-5. Move `tobj` and `lobj` onto upstream (phase 2) — both pointer-clean, and
-   both resolve against the math already linked.
+5. Build the recording GX stub (phase 2, and phase 3's harness) — 61
+   functions, and it unblocks `jobj` and everything behind it.

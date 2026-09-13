@@ -101,10 +101,18 @@ add_test(NAME melee_hsd_tests COMMAND melee_hsd_tests)
 # exercised continuously rather than in one step at the end.  The two binaries
 # cannot be one: both implementations define HSD_ObjAlloc.
 #
-# Units that have moved: objalloc, class, object, list, id, fobj, mtx, and the
-# three the rest depend on -- memory, which the allocator falls back on when
-# no arena is set, hash, which the class registry searches through, and
-# spline, which the animation interpreter evaluates its curves with.
+# Units that have moved: objalloc, class, object, list, id, fobj, aobj, mtx,
+# archive, util, random and quatlib, plus the three the rest
+# depend on -- memory, which the allocator falls back on when no arena is set,
+# hash, which the class registry searches through, and spline, which the
+# animation interpreter evaluates its curves with.
+#
+# jobj and the render half (tobj, pobj, mobj, cobj, tev, texp, state, shadow)
+# are not here yet: they need the GX surface this target deliberately does not
+# link.  robj and wobj wait with them: both are GX-free themselves, but robj
+# reaches deep into jobj and wobj drives robj.  upstream_host.c stubs the
+# three HSD_JObj* entry points the units above reach for, none of which
+# anything under test calls.
 #
 # Aurora's matrix and vector implementations are linked in alongside: mtx.c
 # calls the SDK math, and Aurora macro-aliases the unprefixed MTX* spellings
@@ -127,7 +135,12 @@ else ()
             sysdolphin/baselib/list
             sysdolphin/baselib/id
             sysdolphin/baselib/fobj
+            sysdolphin/baselib/aobj
             sysdolphin/baselib/mtx
+            sysdolphin/baselib/archive
+            sysdolphin/baselib/util
+            sysdolphin/baselib/random
+            sysdolphin/baselib/quatlib
             sysdolphin/baselib/memory
             sysdolphin/baselib/hash
             sysdolphin/baselib/spline)
@@ -137,6 +150,8 @@ else ()
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_core.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_fobj.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_mtx.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_aobj.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_archive.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_objalloc.cpp
             ${CMAKE_CURRENT_LIST_DIR}/upstream_host.c
             ${MELEE_UPSTREAM_UNITS}
@@ -169,6 +184,10 @@ else ()
                 -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_link_options(melee_hsd_upstream_tests PRIVATE
                 -fsanitize=address,undefined)
+    endif ()
+
+    if (NOT MSVC)
+        target_link_libraries(melee_hsd_upstream_tests PRIVATE m)
     endif ()
 
     add_test(NAME melee_hsd_upstream_tests COMMAND melee_hsd_upstream_tests)

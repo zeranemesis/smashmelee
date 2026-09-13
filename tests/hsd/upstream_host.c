@@ -71,3 +71,30 @@ void __assert(char* file, unsigned int line, char* message)
             message);
     abort();
 }
+
+void HSD_Panic(char* file, unsigned int line, char* message)
+{
+    fprintf(stderr, "upstream panic: %s:%u: %s\n", file, line, message);
+    abort();
+}
+
+// The joint object is the one part of the scene graph that cannot come over
+// yet: jobj.c is GX-free itself, but it reaches into tobj, pobj and texp for
+// display, and those need the GX surface this target does not have.  These
+// three are the only entry points the units already here reach for, from
+// HSD_AObjLoadDesc and HSD_RObjLoadDesc; nothing under test calls them.
+void* HSD_JObjLoadJoint(void* joint)
+{
+    (void) joint;
+    fprintf(stderr, "HSD_JObjLoadJoint reached before jobj was ported\n");
+    abort();
+}
+
+void HSD_JObjUnref(void* jobj) { (void) jobj; }
+
+void HSD_JObjSetupMatrixSub(void* jobj)
+{
+    (void) jobj;
+    fprintf(stderr, "HSD_JObjSetupMatrixSub reached before jobj was ported\n");
+    abort();
+}

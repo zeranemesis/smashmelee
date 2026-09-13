@@ -153,6 +153,15 @@ order.
       reaching zero.  It also established that `hsdSearchClassInfo` is a host
       addition — upstream's reads a hash nothing in the decompilation
       populates, so it always answers NULL;
+- [x] compile and run fifteen upstream `sysdolphin` units in
+      `melee_hsd_upstream_tests` — `objalloc`, `class`, `object`, `list`,
+      `id`, `fobj`, `aobj`, `mtx`, `archive`, `util`, `random`, `quatlib`,
+      `memory`, `hash`, `spline` — with Aurora's matrix and vector
+      implementations linked in.  The 23 `MTX` helpers the plan expected to
+      write were already there, macro-aliased onto Aurora's `C_MTX*`;
+- [x] assert that upstream's `HSD_ArchiveParse` refuses a big-endian
+      container on a little-endian host, which is the converters'
+      justification stated in upstream's own code;
 - [x] carry the SDK spellings Aurora's Dolphin headers omit in
       `include/melee/port/dolphin_compat.h`, and shadow upstream's
       `Runtime/platform.h` from `cmake/MeleeUpstream.cmake` so its `ssize_t`
