@@ -113,7 +113,6 @@ option(SKIP_HU_ALLOC "Skip the game's built in allocator" OFF)
 option(RUNTIME_SANITIZE "Runtime (stack) sanitization" OFF)
 option(MELEE_BOOTSTRAP "Build the Melee PC bootstrap instead of Mario Party 4 game_main" ON)
 
-set(USE_ASAN OFF CACHE BOOL "Disable ASan" FORCE)
 set(AURORA_ENABLE_DVD ON)
 set(AURORA_ENABLE_RMLUI ON CACHE BOOL "Enable RmlUi UI support" FORCE)
 set(RUNTIME_SANITIZE OFF)
