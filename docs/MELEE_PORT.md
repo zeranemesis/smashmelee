@@ -175,6 +175,17 @@ head rather than walking to the tail, for instance).
 - controller input, collision, camera, HUD, and match completion;
 - deterministic 60 Hz simulation.
 
+### Direction
+
+Reimplementing Melee by hand does not reach a complete game: it is roughly
+490,000 lines of C. `doldecomp/melee` is decompiled essentially in full, and
+95.5% of it already passes a native x86-64 syntax check, so compiling those
+sources against a host Dolphin SDK is the path M1's exit criteria describe.
+What that measurement does and does not establish — and the pointer-width
+fork it exposes — is written up in
+[UPSTREAM_NATIVE_SPIKE.md](UPSTREAM_NATIVE_SPIKE.md), reproducible through
+`tools/upstream_native_spike.py`.
+
 ### M4 — full-game coverage
 
 - remaining fighters, stages, items, single-player modes, menus, save data, movies, and audio;
