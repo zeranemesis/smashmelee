@@ -16,8 +16,14 @@ directory that shadows ``src/Runtime/platform.h`` on the include path:
   * ``extern/dolphin/include/libc/math.h`` defines ``fabsf`` as a macro, which
     rewrites the host ``math.h`` declaration.
 
+With ``--link-surface`` it goes further: it compiles real object files,
+links their symbol tables together, and reports which Dolphin SDK symbols are
+still unresolved and how many of those Aurora already implements.  That number,
+not the syntax number, is what bounds a compiled-upstream path.
+
 Usage:
     tools/upstream_native_spike.py /path/to/doldecomp/melee [--cc clang]
+    tools/upstream_native_spike.py /path/to/doldecomp/melee --link-surface
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ import collections
 import concurrent.futures
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -68,6 +75,53 @@ CAUSES = [
 ]
 
 
+SDK_PREFIXES = ("GX", "OS", "VI", "DVD", "CARD", "PAD", "SI", "ARQ", "AR",
+                "C_", "PS", "MTX", "Mtx", "Vec", "Quat", "DC", "IC", "LC")
+
+FAMILIES = [
+    ("GX", ("GX",)), ("OS", ("OS",)), ("VI", ("VI",)), ("DVD", ("DVD",)),
+    ("CARD", ("CARD",)), ("PAD", ("PAD",)), ("SI", ("SI",)),
+    ("ARAM", ("ARQ", "AR")), ("cache", ("DC", "IC", "LC")),
+    ("math", ("C_", "PS", "MTX", "Mtx", "Vec", "Quat")),
+]
+
+
+def family_of(symbol: str) -> str:
+    for name, prefixes in FAMILIES:
+        if symbol.startswith(prefixes):
+            return name
+    return "other"
+
+
+def symbols(command: list[str], objects: list[pathlib.Path],
+            selector) -> set[str]:
+    """Runs nm over the objects in batches and collects matching names."""
+    found: set[str] = set()
+    for start in range(0, len(objects), 256):
+        batch = [str(path) for path in objects[start:start + 256]]
+        result = subprocess.run(command + batch, capture_output=True, text=True)
+        for line in result.stdout.splitlines():
+            fields = line.split(":", 1)[-1].split()
+            name = selector(fields)
+            if name is not None:
+                found.add(name)
+    return found
+
+
+def aurora_symbols(repository: pathlib.Path) -> set[str]:
+    """Function definitions in Aurora's Dolphin SDK implementation."""
+    library = repository / "extern" / "aurora" / "lib"
+    pattern = re.compile(
+        r"^[A-Za-z_][A-Za-z0-9_:<>,*\s]*?\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+    found: set[str] = set()
+    for path in list(library.rglob("*.cpp")) + list(library.rglob("*.c")):
+        for line in path.read_text(errors="replace").splitlines():
+            match = pattern.match(line)
+            if match and match.group(1).startswith(SDK_PREFIXES):
+                found.add(match.group(1))
+    return found
+
+
 def classify(output: str) -> str:
     for line in output.splitlines():
         if "error:" not in line:
@@ -85,6 +139,10 @@ def main() -> int:
                         help="path to a doldecomp/melee checkout")
     parser.add_argument("--cc", default="clang", help="host C compiler")
     parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument("--link-surface", action="store_true",
+                        help="also compile objects and report the unresolved "
+                             "Dolphin SDK symbols")
+    parser.add_argument("--nm", default="nm")
     args = parser.parse_args()
 
     upstream = args.upstream.resolve()
@@ -103,7 +161,7 @@ def main() -> int:
         force.write_text(SHIM_FORCE)
 
         command = [
-            args.cc, "-fsyntax-only", "-std=gnu11", "-w",
+            args.cc, "-std=gnu11", "-w",
             "-Wno-incompatible-function-pointer-types",
             f"-I{shim_root}", f"-I{source}",
             f"-I{upstream / 'extern' / 'dolphin' / 'include'}",
@@ -115,8 +173,17 @@ def main() -> int:
                        if p.is_relative_to(source / "melee")
                        or p.is_relative_to(source / "sysdolphin"))
 
+        objects = shim_root / "obj"
+        objects.mkdir()
+
         def check(path: pathlib.Path) -> tuple[pathlib.Path, str | None]:
-            result = subprocess.run(command + [str(path)],
+            if args.link_surface:
+                target = objects / (str(path.relative_to(source)).replace(
+                    "/", "_") + ".o")
+                extra = ["-c", "-O0", "-o", str(target)]
+            else:
+                extra = ["-fsyntax-only"]
+            result = subprocess.run(command + extra + [str(path)],
                                     capture_output=True, text=True)
             if result.returncode == 0:
                 return path, None
@@ -127,6 +194,38 @@ def main() -> int:
             for path, cause in pool.map(check, files):
                 if cause is not None:
                     failures.append((path, cause))
+
+        link_report: list[str] = []
+        if args.link_surface:
+            built = sorted(objects.glob("*.o"))
+            nm = shutil.which(args.nm) or args.nm
+            defined = symbols([nm, "--defined-only", "-A"], built,
+                              lambda f: f[2] if len(f) == 3 else None)
+            undefined = symbols([nm, "-u", "-A"], built,
+                                lambda f: f[1] if len(f) == 2 and f[0] == "U"
+                                else None)
+            unresolved = undefined - defined
+            sdk = {name for name in unresolved
+                   if name.startswith(SDK_PREFIXES)}
+            provided = aurora_symbols(pathlib.Path(__file__).resolve().parent
+                                      .parent)
+            gap = sorted(sdk - provided)
+
+            link_report.append(
+                f"\n{len(built)} objects define {len(defined)} symbols and "
+                f"reference {len(undefined)} externals.")
+            link_report.append(
+                f"{len(unresolved)} stay unresolved once they are linked "
+                f"together, {len(sdk)} of them Dolphin SDK symbols.")
+            link_report.append(
+                f"Aurora implements {len(sdk) - len(gap)} of those "
+                f"{len(sdk)}; {len(gap)} are missing:")
+            by_family = collections.Counter(family_of(name) for name in gap)
+            for name, count in by_family.most_common():
+                members = [symbol for symbol in gap if family_of(symbol) == name]
+                link_report.append(f"  {count:4d}  {name}: " +
+                                   " ".join(members[:6]) +
+                                   (" ..." if count > 6 else ""))
 
     passed = len(files) - len(failures)
     print(f"{passed}/{len(files)} upstream translation units pass a native "
@@ -142,6 +241,8 @@ def main() -> int:
     print("\nFailures by module:")
     for module, count in by_module.most_common(12):
         print(f"  {count:4d}  {module}")
+    for line in link_report:
+        print(line)
     return 0
 
 

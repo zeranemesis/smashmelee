@@ -17,13 +17,17 @@ This document records what was actually measured, not what seems plausible.
 
 ## Method
 
-`tools/upstream_native_spike.py` runs a syntax-only compile of every `.c` file
-under `src/melee` and `src/sysdolphin` of an upstream checkout, using the host
-compiler and host libc, and groups the failures by cause:
+`tools/upstream_native_spike.py` compiles every `.c` file under `src/melee`
+and `src/sysdolphin` of an upstream checkout with the host compiler and host
+libc, and groups the failures by cause.  `--link-surface` goes further: it
+emits real object files, links their symbol tables together, and reports which
+Dolphin SDK symbols remain unresolved and how many of those Aurora already
+implements.
 
 ```sh
 git clone --depth 1 https://github.com/doldecomp/melee.git /tmp/melee-upstream
 tools/upstream_native_spike.py /tmp/melee-upstream
+tools/upstream_native_spike.py /tmp/melee-upstream --link-surface
 ```
 
 It does not modify the checkout and copies no upstream code into this
@@ -55,6 +59,35 @@ Failures by module:
      3  melee/if     3  melee/vi     2  melee/mn     1  melee/lb
 ```
 
+## The link surface
+
+The same 940 units also produce real x86-64 object files, so the measurement
+can be taken one step further:
+
+```
+940 objects define 24112 symbols and reference 11081 externals.
+882 stay unresolved once they are linked together, 212 of them Dolphin SDK symbols.
+Aurora implements 151 of those 212; 61 are missing:
+    23  math: MTXFrustum MTXLightFrustum MTXOrtho MTXPerspective MTXRotRad ...
+    21  OS: OSCreateThread OSCreateAlarm OSDisableInterrupts OSGetSoundMode ...
+     7  VI: VIGetNextField VIGetRetraceCount VISetBlack VISetPostRetraceCallback ...
+     6  GX: GXInitFogAdjTable GXNtsc480IntDf GXSetCopyClamp GXSetMisc GXSetTevClampMode GXWaitDrawDone
+     3  cache: DCFlushRange DCInvalidateRange DCStoreRange
+     1  PAD: PADSetSamplingRate
+```
+
+Sixty-one symbols is a list, not a project.  Most are shallow on a host: the
+`MTX` projection helpers are textbook matrices, the `DC*` cache operations are
+no-ops on a coherent host, and the `OS` thread and alarm surface maps onto the
+host's own threading.  The rest of the 882 splits into roughly 520 symbols
+that the 44 uncompiled files would themselves define, the musyx audio API
+(`AX*`, `AXFX*` — already vendored as a submodule here), THP movie playback,
+and a handful of libc functions.
+
+One caveat on the Aurora figure: it is derived by scanning Aurora's sources
+for function definitions, so it counts what is written, not what is verified
+to behave like the console.
+
 ## What this does and does not show
 
 It shows that the decompiled game's **types, headers, and declarations**
@@ -62,9 +95,10 @@ resolve against a host toolchain almost everywhere. The eight declaration
 mismatches are upstream bugs that only a compiler stricter than MWCC reports,
 and the two missing blobs are font data the decomp does not redistribute.
 
-It does **not** show that the game builds, links, or runs. A syntax check
-resolves no symbol: the full Dolphin SDK surface (OS, VI, DVD, PAD, CARD, GX,
-AX, ARQ, matrix) has to exist behind it, and Aurora only covers part of that.
+It does **not** show that the game runs.  Compiling and linking say nothing
+about behavior: Aurora's GX has to draw what the console drew, the DAT
+relocation model has to work, and byte order has to be handled at every read.
+Those are the hard parts, and no symbol count measures them.
 
 The 33 layout failures are the substantive result, and they are not noise.
 The decompilation asserts the console's structure offsets because DAT archives
@@ -95,7 +129,10 @@ machine with `gcc-multilib` installed before treating that option as viable.
 
 Keep the current host-decoding architecture for now — it is what renders
 today — and treat this measurement as the input to the decision, not the
-decision itself. The next thing worth measuring is the **link** surface: how
-much of the Dolphin SDK the upstream `sysdolphin` sources actually reference,
-and how much of that Aurora already provides. That number, not the syntax
-number, determines how far a compiled-upstream path can be taken.
+decision itself. The pointer-width fork above is the decision that has to be taken first,
+because it determines whether archives can be relocated in place or must keep
+being decoded into host structures — and therefore whether upstream's `gm`,
+`sc`, and `mn` code can be compiled as-is or has to be adapted.
+
+If the answer turns out to be "compile upstream", the 61 missing symbols are
+the first piece of work, and they are small enough to schedule.
