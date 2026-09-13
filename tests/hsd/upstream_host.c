@@ -13,6 +13,9 @@
 #include <malloc.h>
 #endif
 
+#include <melee/port/dolphin_compat.h>
+#include <sysdolphin/baselib/video.h>
+
 // OSAlloc.h declares this as the heap OSAlloc()/OSFree() use.
 volatile int __OSCurrHeap = 0;
 
@@ -78,23 +81,71 @@ void HSD_Panic(char* file, unsigned int line, char* message)
     abort();
 }
 
-// The joint object is the one part of the scene graph that cannot come over
-// yet: jobj.c is GX-free itself, but it reaches into tobj, pobj and texp for
-// display, and those need the GX surface this target does not have.  These
-// three are the only entry points the units already here reach for, from
-// HSD_AObjLoadDesc and HSD_RObjLoadDesc; nothing under test calls them.
-void* HSD_JObjLoadJoint(void* joint)
+void OSPanic(const char* file, int line, const char* message, ...)
 {
-    (void) joint;
-    fprintf(stderr, "HSD_JObjLoadJoint reached before jobj was ported\n");
+    va_list arguments;
+    fprintf(stderr, "OSPanic: %s:%d: ", file, line);
+    va_start(arguments, message);
+    vfprintf(stderr, message, arguments);
+    va_end(arguments);
+    fputc('\n', stderr);
     abort();
 }
 
-void HSD_JObjUnref(void* jobj) { (void) jobj; }
-
-void HSD_JObjSetupMatrixSub(void* jobj)
+// perf.c times its statistics with this.  A counter rather than a clock: the
+// point of the offline suite is that the same input produces the same output,
+// and a real clock would put the wall time into a recorded frame.
+long long OSGetTime(void)
 {
-    (void) jobj;
-    fprintf(stderr, "HSD_JObjSetupMatrixSub reached before jobj was ported\n");
-    abort();
+    static long long ticks = 0;
+    return ++ticks;
 }
+
+// cobj.c asks which field is next when it jitters the viewport for an
+// interlaced mode.  Answering zero every time keeps the jitter deterministic;
+// a test that wants the other field sets the render mode's field rendering
+// off instead.
+unsigned int VIGetNextField(void) { return 0; }
+
+
+// What Aurora's GXSetArray needs and the GameCube's did not.  The adapter in
+// include/melee/port/dolphin_compat.h routes upstream's three-argument calls
+// through these; the reasoning is there.
+//
+// Both answers below are placeholders, and deliberately visible ones: a
+// recorded trace shows the length as 0 and the byte order as big-endian, so a
+// test reads exactly what the port has not yet decided.  Nothing in this
+// target draws, so nothing depends on them being right yet.  A real renderer
+// does: the length has to come from the archive the array lives in, and the
+// byte order from whether that archive was converted on load.
+u32 melee_gx_array_extent(const void* base)
+{
+    (void) base;
+    return 0;
+}
+
+bool melee_gx_array_is_little_endian(const void* base)
+{
+    (void) base;
+    return false;
+}
+
+// The two pieces of HSD that live in units still at the boot boundary.
+//
+// HSD_GetCurrentRenderPass is defined in initialize.c, which cannot come over
+// until the OS arena and heap do -- it is phase 1 of docs/PLAN.md, not phase
+// 2.  cobj.c reads it to choose which camera setup to run, so answering
+// HSD_RP_SCREEN here is what puts the camera on the ordinary path.
+HSD_RenderPass HSD_GetCurrentRenderPass(void) { return HSD_RP_SCREEN; }
+
+// HSD_VIData is defined in video.c, which needs three SDK symbols Aurora does
+// not have (GXInitFogAdjTable is fog.c's; video.c's own are
+// VIPadFrameBufferWidth, GXWaitDrawDone and the GXNtsc480IntDf render mode).
+// Defining it here is deliberate and self-announcing: the day video.c joins
+// the target, the linker reports a duplicate and this goes away.
+//
+// It is zero, which means a render mode of all zeroes.  A test that cares
+// what cobj computes from the viewport fills the fields it needs first --
+// which is the useful arrangement anyway, because it makes the video state an
+// input to the test rather than a global the test has to work around.
+HSD_VIInfo HSD_VIData;

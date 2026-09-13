@@ -64,6 +64,13 @@ for them — MSVC wants `_USE_MATH_DEFINES` before `<math.h>`, glibc wants
 prelude asks both ways and then falls back to the literals, which are the same
 in both libraries.
 
+A fourth followed once `pobj` compiled: Aurora's `GXSetArray` takes five
+arguments under `TARGET_PC` where the console's takes three, so a
+function-like macro in the prelude maps one onto the other. It has to be
+installed *after* Aurora's declaration has been parsed — a macro defined
+before it would be applied to the declaration itself — which is why the
+prelude includes `<dolphin/gx.h>` rather than leaving that to each unit.
+
 ## Result
 
 Two configurations were measured. The first uses upstream's own Dolphin

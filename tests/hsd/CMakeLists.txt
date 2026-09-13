@@ -101,18 +101,28 @@ add_test(NAME melee_hsd_tests COMMAND melee_hsd_tests)
 # exercised continuously rather than in one step at the end.  The two binaries
 # cannot be one: both implementations define HSD_ObjAlloc.
 #
-# Units that have moved: objalloc, class, object, list, id, fobj, aobj, mtx,
-# archive, util, random and quatlib, plus the three the rest
-# depend on -- memory, which the allocator falls back on when no arena is set,
-# hash, which the class registry searches through, and spline, which the
-# animation interpreter evaluates its curves with.
+# Thirty-five units have moved, which is the whole of HSD's scene graph and
+# most of what stands under it: the object and class model (objalloc, class,
+# object, list, id, hash, memory), animation (fobj, aobj, bytecode, spline),
+# the archive loader, the math pools (mtx, quatlib) and utilities (util,
+# random), the entire render half (jobj, dobj, mobj, pobj, tobj, cobj, lobj,
+# tev, texp, texpdag, state, shadow, robj, wobj, displayfunc), and the
+# particle system that shares the skinning helper with it (particle,
+# generator, psappsrt, perf).
 #
-# jobj and the render half (tobj, pobj, mobj, cobj, tev, texp, state, shadow)
-# are not here yet: they need the GX surface this target deliberately does not
-# link.  robj and wobj wait with them: both are GX-free themselves, but robj
-# reaches deep into jobj and wobj drives robj.  upstream_host.c stubs the
-# three HSD_JObj* entry points the units above reach for, none of which
-# anything under test calls.
+# The render half arrives because gx_record.cpp gives it a GX to talk to: 84
+# entry points that append a line to a trace instead of drawing.  That is not
+# a placeholder for a renderer, it is the instrument phase 3 of docs/PLAN.md
+# needs -- a deterministic transcript of a frame, to compare a real one
+# against.
+#
+# Four units remain outside, and each for a named reason: fog needs
+# GXInitFogAdjTable and video needs VIPadFrameBufferWidth, GXWaitDrawDone and
+# the GXNtsc480IntDf render mode, none of which Aurora has; psdisp asserts
+# that a structure holding a pointer is eight bytes, which it is not here; and
+# debug is written against the Metrowerks libc's FILE internals, so a host
+# port replaces it rather than compiles it.  initialize is not a gap but a
+# phase: it reaches for the OS arena and heap, which is phase 1.
 #
 # Aurora's matrix and vector implementations are linked in alongside: mtx.c
 # calls the SDK math, and Aurora macro-aliases the unprefixed MTX* spellings
@@ -143,10 +153,36 @@ else ()
             sysdolphin/baselib/quatlib
             sysdolphin/baselib/memory
             sysdolphin/baselib/hash
-            sysdolphin/baselib/spline)
+            sysdolphin/baselib/spline
+            # The scene graph and its display path.
+            sysdolphin/baselib/jobj
+            sysdolphin/baselib/dobj
+            sysdolphin/baselib/mobj
+            sysdolphin/baselib/pobj
+            sysdolphin/baselib/tobj
+            sysdolphin/baselib/cobj
+            sysdolphin/baselib/lobj
+            sysdolphin/baselib/robj
+            sysdolphin/baselib/wobj
+            sysdolphin/baselib/tev
+            sysdolphin/baselib/texp
+            sysdolphin/baselib/texpdag
+            sysdolphin/baselib/state
+            sysdolphin/baselib/shadow
+            sysdolphin/baselib/displayfunc
+            sysdolphin/baselib/bytecode
+            # The particle system, which owns the skinning helper jobj and
+            # dobj build envelope matrices with.
+            sysdolphin/baselib/particle
+            sysdolphin/baselib/generator
+            sysdolphin/baselib/psappsrt
+            sysdolphin/baselib/perf)
 
     add_executable(melee_hsd_upstream_tests
             ${CMAKE_CURRENT_LIST_DIR}/harness.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/gx_record.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/gx_texture_stub.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_scene.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_core.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_fobj.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_mtx.cpp

@@ -134,10 +134,13 @@ What remains for this phase:
 - `VI`'s retrace callbacks, bridged onto Aurora's swapchain and the 60 Hz
   clock;
 - the `DC`/`IC` cache operations, which are no-ops on a coherent host;
-- `GXSetArray`, which takes five arguments in Aurora where the console SDK
-  takes three. The two extra are a size bound and a little-endian flag —
-  Aurora's own answer to vertex byte order — so upstream's two call sites in
-  `pobj.c` are adapted rather than worked around.
+- `GXSetArray`'s two extra arguments. The adapter is written (see phase 2),
+  but it asks `melee_gx_array_extent()` and
+  `melee_gx_array_is_little_endian()` for answers the offline suite does not
+  have to give. A renderer does: the length has to come from the archive the
+  vertex array lives in, and the byte order from whether that archive was
+  converted when it was loaded. Both are one function each, and both are
+  phase 3's to fill in.
 
 **On `OS` threads.** Melee runs DVD and audio work on OS threads with alarms
 and interrupt masking. This repository already vendors `libco`; cooperative
@@ -170,16 +173,37 @@ threading model, which is the one genuinely design-sensitive piece.
 The suite already pins `objalloc`, `class`/`object`, `list`, `id`, `fobj`
 (twelve stream shapes) and `aobj` (seven playback modes) against upstream's
 own behavior, so most of this phase has its acceptance test written already.
-Fifteen units have moved: `objalloc`, `class`, `object`, `list`, `id`, `fobj`,
-`aobj`, `mtx`, `archive`, `util`, `random` and `quatlib`, with `memory`,
-`hash` and `spline` behind them and Aurora's matrix and vector
-implementations linked in alongside. Running them side by side found a
-real defect in the port's `ref_DEC`, which released a reference one call early
-whenever more than one was held, and established that the port's
-`hsdSearchClassInfo` is a host addition — upstream's reads a hash nothing
-populates and always answers NULL. `fobj` carries the twelve-stream table,
-now asserted against both interpreters, so the encoding bug that started this
-cannot come back.
+
+**Thirty-five units have moved**, which is the whole of HSD's scene graph and
+most of what stands under it: the object and class model (`objalloc`, `class`,
+`object`, `list`, `id`, `hash`, `memory`), animation (`fobj`, `aobj`,
+`bytecode`, `spline`), the archive loader, the math pools (`mtx`, `quatlib`)
+and utilities (`util`, `random`), the entire render half (`jobj`, `dobj`,
+`mobj`, `pobj`, `tobj`, `cobj`, `lobj`, `tev`, `texp`, `texpdag`, `state`,
+`shadow`, `robj`, `wobj`, `displayfunc`), and the particle system that owns
+the skinning helper the scene graph builds envelope matrices with (`particle`,
+`generator`, `psappsrt`, `perf`). Aurora's matrix and vector implementations
+link in alongside.
+
+Running them side by side found a real defect in the port's `ref_DEC`, which
+released a reference one call early whenever more than one was held, and
+established that the port's `hsdSearchClassInfo` is a host addition —
+upstream's reads a hash nothing populates and always answers NULL. `fobj`
+carries the twelve-stream table, now asserted against both interpreters, so
+the encoding bug that started this cannot come back.
+
+**Four units remain outside, each for a named reason.** `fog` needs
+`GXInitFogAdjTable`; `video` needs `VIPadFrameBufferWidth`, `GXWaitDrawDone`
+and the `GXNtsc480IntDf` render mode — none of the four are in Aurora, and
+they are four of the five absent SDK symbols phase 1 lists. `psdisp` asserts
+that a structure holding a pointer is eight bytes, which it is not on a
+64-bit host; that one is a `*32b` twin, not a missing symbol. `debug` is
+written against the Metrowerks libc's `FILE` internals, so a host port
+replaces it rather than compiles it. `initialize` is not a gap but a phase:
+it reaches for the OS arena and heap, which is phase 1's work, and until it
+arrives the suite supplies the two things it owns — `HSD_GetCurrentRenderPass`
+and, from `video`, `HSD_VIData` — from `tests/hsd/upstream_host.c`. Both are
+written to collide deliberately: the day those units join, the linker says so.
 
 ### What the pointer work actually is
 
@@ -193,36 +217,53 @@ depends on there are 16, in 6 units**, and they fall into three patterns:
 | Pattern | Sites | What it is |
 |---|---|---|
 | ID-table keys | 9 (`jobj`, `pobj`, `robj`, `aobj`) | HSD stores a descriptor's **address** as the hash key for the runtime object built from it — `HSD_IDInsertToTable(NULL, (u32) joint, jobj)`. Key on the archive offset instead, which the port already carries and which cannot collide within an archive. |
-| `GXSetArray` arity | 2 (`pobj`) | Aurora takes a size bound and a little-endian flag the console SDK does not. |
+| `GXSetArray` arity | 2 (`pobj`) | **Resolved.** Aurora's `TARGET_PC` form takes the array's byte length and its byte order too, because it writes a 64-bit base into the command stream and the backend copies the array out rather than reading it where it lies. `include/melee/port/dolphin_compat.h` maps the console's three arguments onto Aurora's five; the two the call site cannot supply are asked of `melee_gx_array_extent()` and `melee_gx_array_is_little_endian()`, which is where phase 3 owes a real answer. |
 | In-place relocation | 1 (`archive`) | `Locate()`'s `*ptr += (u32) archive->data`. This is the one the `*32b` converters replace. |
 | Pool arena | 7 (`objalloc`) | Avoided entirely by leaving `HSD_ObjSetHeap` unset, as phase 0 found. |
 
 Twenty of the 27 core units are completely pointer-clean, `jobj` included.
 
-### The gate the rest of the layer waits on
+### The gate the rest of the layer waited on · **cleared**
 
-The remaining units divide cleanly, and the division is not the one the
-pointer inventory suggests:
+The scene-object layer was never held back by the pointer casts. It was held
+back by GX: every unit in the render half calls it, and Aurora's
+implementation pulls in the window, the swapchain and the shader compiler.
 
-| Unit | GX symbols | Why it is not here yet |
-|---|---|---|
-| `jobj` | 0 | GX-free itself, but calls into `tobj`, `pobj` and `texp` to display |
-| `dobj`, `mobj` | 0 | travel with `jobj` |
-| `robj` | 0 | GX-free, but reaches deep into `jobj` |
-| `wobj` | 0 | drives `robj` |
-| `cobj` | 4 | |
-| `texp` | 3 | |
-| `lobj` | 7 | |
-| `state` | 11 | |
-| `tobj` | 13 | |
-| `shadow` | 14 | |
-| `tev` | 16 | |
+`tests/hsd/gx_record.cpp` clears it with **84 GX entry points**. Each is
+defined `extern "C"` against Aurora's own declaration, so a signature that
+drifts from the real GX does not compile — the same reason the `*32b`
+converters come from upstream's code rather than from a document.
 
-All of them compile. **Sixty-one GX functions** stand between this target and
-the whole scene-object layer linking, and that is the next real gate rather
-than the pointer casts. A GX stub that *records* its calls rather than
-drawing would clear it and double as the harness phase 3 needs for golden
-frames, so it is worth building once, properly.
+Eighty-one of them write down what they were told instead of drawing. The
+other three are the `GXGetTexObj*` getters, which answer from what
+`GXInitTexObj` stored in the texture object, because HSD reads its texture
+dimensions back out of GX rather than keeping its own copy and branches on
+what it gets. `GXGetTexBufferSize` is the fourth of that kind and already
+existed: `tests/hsd/gx_texture_stub.cpp` mirrors the console's tile
+arithmetic, and both targets share it.
+
+The trace is deliberately comparable rather than merely inspectable. Pointers
+never reach it as addresses — each distinct pointer takes a small index in the
+order the trace first sees it — so the same scene produces the same text on
+every host, under any allocator. The three matrix entry points record the
+matrix *elements*, not the address of the matrix, because a trace that says a
+camera loaded some matrix is worth nothing.
+
+That is not a placeholder for a renderer. It is the instrument phase 3 needs,
+and it already works: setting a camera current records
+
+```
+GXSetViewport(0, 0, 640, 480, 0, 1)
+GXSetScissor(0, 0, 640, 480)
+GXSetProjection([1.29904 0 0 0 0 1.73205 0 0 0 0 -0.010101 -1.0101 0 0 -1 0], 0)
+```
+
+— three calls and nothing else, with a projection matrix whose terms are the
+console's own: the near plane over the half-width and half-height it subtends,
+and a depth range mapped into [0, -1] with w carried in the last row. The
+suite asserts the shape of that frame as text and its computed floats with a
+tolerance, which is how a golden frame has to be compared when the numbers
+come out of the host's `tanf`.
 
 One more thing is now asserted rather than assumed: upstream's
 `HSD_ArchiveParse` refuses a big-endian container on a little-endian host —
@@ -233,8 +274,9 @@ coming from upstream's code rather than from this document.
 **Done when** no file remains under `src/melee_port/hsd/`, and all 61 cases
 plus whatever the swap adds are green on three toolchains.
 
-**Size.** Large but bounded: ~35 converters, ~76 units to bring up, and 16
-pointer casts to resolve in the units that matter.
+**Size.** Large but bounded: ~35 converters, ~76 units to bring up, and 14
+pointer casts left to resolve in the units that matter — `GXSetArray`'s two
+are done.
 
 ## Phase 3 — The first frame drawn by the game's own code
 
@@ -357,8 +399,10 @@ ever. A legally obtained disc image is a runtime input.
    against the original binary and are meaningless on a 64-bit host.
    Mitigation: disable for host builds, and record that the `*32b` twins are
    what now guarantees the layout. They are also the wrong inventory to work
-   from — `--pointer-casts` names the actual sites, and there are 16 of them
-   in the units that matter.
+   from — `--pointer-casts` names the actual sites, and 14 remain in the units
+   that matter. One assertion is not merely noise, though: `psdisp` asserts a
+   pointer-holding structure is eight bytes, and that is a real `*32b` twin
+   waiting to be written rather than an assertion to switch off.
 5. **Upstream drift.** The submodule is pinned; updating it is a deliberate
    act with the suite as the gate.
 
@@ -366,15 +410,25 @@ ever. A legally obtained disc image is a runtime input.
 
 Phase 0 is done. These are what follow.
 
+Phase 0 is done, and so is action 5 of the previous list: the recording GX
+surface exists, and with it the whole scene-object layer.
+
 1. Decide the threading model and write it down (phase 1). Everything above
    phase 1 inherits it, and it is the only remaining design decision.
-2. Key the HSD ID table on archive offsets rather than descriptor addresses
-   (phase 2) — nine of the sixteen pointer casts, and the port's `id` unit
-   already uses 32-bit keys, so this is a decision more than a discovery.
-3. Write `HSD_Joint32b` and `byteswap_hsd_joint()`, and check it against
+2. Write `HSD_Joint32b` and `byteswap_hsd_joint()`, and check it against
    `HostScene`'s existing joint decode (phase 2) — the first converter, with
-   its oracle already in the repository.
-4. Add the five absent SDK symbols (phase 1), which is a short, bounded task
-   now that the list is right.
-5. Build the recording GX stub (phase 2, and phase 3's harness) — 61
-   functions, and it unblocks `jobj` and everything behind it.
+   its oracle already in the repository, and now with upstream's `jobj`
+   running beside it to answer to.
+3. Key the HSD ID table on archive offsets rather than descriptor addresses
+   (phase 2) — nine of the fourteen remaining pointer casts, and the port's
+   `id` unit already uses 32-bit keys, so this is a decision more than a
+   discovery.
+4. Add the five absent SDK symbols (phase 1). Four of them now have a name
+   attached to a unit: `GXInitFogAdjTable` is what keeps `fog` out, and
+   `VIPadFrameBufferWidth`, `GXWaitDrawDone` and `GXNtsc480IntDf` are what
+   keep `video` out. `GXNtsc480IntDf` is a render-mode constant and has to be
+   sourced, not invented.
+5. Drive a loaded archive through upstream's `jobj` and record the frame.
+   Everything for it is now in place — the scene graph, the camera, the
+   recorder — and it is the first point at which the game's own code draws
+   something this project can compare against the console.

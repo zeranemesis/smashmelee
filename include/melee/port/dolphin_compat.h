@@ -88,4 +88,38 @@ typedef enum _GXTevClampMode {
 } GXTevClampMode;
 #endif
 
+// GX comes in whole, and through the umbrella header: several of Aurora's GX
+// headers name enums they do not include the declaration of, and only
+// <dolphin/gx.h> puts them in the right order.  It is here, rather than left
+// to each translation unit, because the adapter below has to be installed
+// after Aurora's declaration of GXSetArray has been parsed -- a function-like
+// macro would otherwise be applied to the declaration itself.
+#include <dolphin/gx.h>
+
+// Upstream calls GXSetArray with the three arguments the GameCube took.
+// Aurora's takes five: it writes a 64-bit base pointer into the command
+// stream, and the backend then has to copy the array out of guest memory, so
+// it needs the length in bytes and the byte order as well.  The console
+// needed neither -- the GPU read the array where it lay, big-endian.
+//
+// Aurora offers GXSETARRAY() as the spelling that works on both, and
+// upstream's own SDK header defines it too, so the two call sites in pobj.c
+// are an upstream oversight rather than a disagreement.  Until they change,
+// this maps three arguments onto five.  Within the replacement list the name
+// is not expanded again, so GXSetArray below is Aurora's function.
+//
+// The two arguments the call site cannot supply are asked of the port rather
+// than invented: HSD never records how long a vertex array is, and whether
+// its contents are still big-endian depends on whether the archive was
+// converted when it was loaded.  Phase 3 of docs/PLAN.md is where a real
+// answer is owed; see the definitions for what is answered today.
+#ifndef MELEE_COMPAT_GX_SET_ARRAY
+#define MELEE_COMPAT_GX_SET_ARRAY
+u32 melee_gx_array_extent(const void* base);
+bool melee_gx_array_is_little_endian(const void* base);
+#define GXSetArray(attr, base, stride)                                         \
+    GXSetArray((attr), (base), melee_gx_array_extent(base), (stride),          \
+               melee_gx_array_is_little_endian(base))
+#endif
+
 #endif // MELEE_PORT_DOLPHIN_COMPAT_H

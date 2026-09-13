@@ -153,6 +153,27 @@ order.
       reaching zero.  It also established that `hsdSearchClassInfo` is a host
       addition — upstream's reads a hash nothing in the decompilation
       populates, so it always answers NULL;
+- [x] give the upstream target a GX to talk to: `tests/hsd/gx_record.cpp`
+      implements 84 entry points, each defined against Aurora's own
+      declaration so a drifting signature does not compile.  Eighty-one
+      append a line to a trace instead of drawing; the three `GXGetTexObj*`
+      getters answer from the texture object, because HSD reads its
+      dimensions back out of GX and branches on them.  Pointers are numbered by first appearance
+      rather than printed as addresses, and the matrix entry points record the
+      matrix rather than its address, so a recorded frame compares equal
+      across runs and hosts.  That unblocked the whole render half —
+      `jobj`, `dobj`, `mobj`, `pobj`, `tobj`, `cobj`, `lobj`, `tev`, `texp`,
+      `texpdag`, `state`, `shadow`, `robj`, `wobj`, `displayfunc` — and the
+      particle units that own the skinning helper, for **thirty-five upstream
+      units** in all.  Setting a camera current now records a viewport, a
+      scissor and the console's own perspective matrix, and the suite asserts
+      the shape of that frame as text and its computed terms with a tolerance;
+- [x] adapt `GXSetArray`.  Aurora's `TARGET_PC` form takes the array's byte
+      length and byte order as well, because it writes a 64-bit base into the
+      command stream and the backend copies the array out instead of reading
+      it where it lies.  The prelude maps upstream's three arguments onto
+      Aurora's five and asks the port for the other two, which is the honest
+      shape of the question rather than a zero passed quietly;
 - [x] compile and run fifteen upstream `sysdolphin` units in
       `melee_hsd_upstream_tests` — `objalloc`, `class`, `object`, `list`,
       `id`, `fobj`, `aobj`, `mtx`, `archive`, `util`, `random`, `quatlib`,
