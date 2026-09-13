@@ -43,6 +43,11 @@ constexpr uint32_t kJointRObjDesc = 0x3C;
 constexpr uint32_t kJointSize = 0x40;
 
 // What the union at +0x10 holds is decided by two of the joint's flags.
+bool union_is_display_object(uint32_t flags)
+{
+    return (flags & (JOBJ_PTCL | JOBJ_SPLINE)) == 0;
+}
+
 const char* union_kind(uint32_t flags)
 {
     if ((flags & JOBJ_PTCL) != 0) {
@@ -53,6 +58,59 @@ const char* union_kind(uint32_t flags)
     }
     return "HSD_DObjDesc";
 }
+
+// HSD_DObjDesc, 0x10 bytes on the console.
+constexpr uint32_t kDObjClassName = 0x00;
+constexpr uint32_t kDObjNext = 0x04;
+constexpr uint32_t kDObjMObjDesc = 0x08;
+constexpr uint32_t kDObjPObjDesc = 0x0C;
+constexpr uint32_t kDObjSize = 0x10;
+
+// HSD_MObjDesc, 0x18 bytes.
+constexpr uint32_t kMObjClassName = 0x00;
+constexpr uint32_t kMObjRenderMode = 0x04;
+constexpr uint32_t kMObjTexDesc = 0x08;
+constexpr uint32_t kMObjMaterial = 0x0C;
+constexpr uint32_t kMObjRenderDesc = 0x10;
+constexpr uint32_t kMObjPEDesc = 0x14;
+constexpr uint32_t kMObjSize = 0x18;
+
+// HSD_Material, 0x14 bytes: three GXColors then two floats.
+constexpr uint32_t kMaterialAmbient = 0x00;
+constexpr uint32_t kMaterialDiffuse = 0x04;
+constexpr uint32_t kMaterialSpecular = 0x08;
+constexpr uint32_t kMaterialAlpha = 0x0C;
+constexpr uint32_t kMaterialShininess = 0x10;
+constexpr uint32_t kMaterialSize = 0x14;
+
+// HSD_PObjDesc, 0x18 bytes.  flags and n_display are two u16 in one word.
+constexpr uint32_t kPObjClassName = 0x00;
+constexpr uint32_t kPObjNext = 0x04;
+constexpr uint32_t kPObjVerts = 0x08;
+constexpr uint32_t kPObjFlags = 0x0C;
+constexpr uint32_t kPObjDisplayCount = 0x0E;
+constexpr uint32_t kPObjDisplay = 0x10;
+constexpr uint32_t kPObjUnion = 0x14;
+constexpr uint32_t kPObjSize = 0x18;
+
+// HSD_VtxDescList, 0x18 bytes: four enum words, a fraction byte, a pad byte,
+// a stride, and the array's address.  The list ends with a GX_VA_NULL entry.
+constexpr uint32_t kVtxAttr = 0x00;
+constexpr uint32_t kVtxAttrType = 0x04;
+constexpr uint32_t kVtxCompCnt = 0x08;
+constexpr uint32_t kVtxCompType = 0x0C;
+constexpr uint32_t kVtxFrac = 0x10;
+constexpr uint32_t kVtxStride = 0x12;
+constexpr uint32_t kVtxVertex = 0x14;
+constexpr uint32_t kVtxSize = 0x18;
+
+// A vertex descriptor list of more entries than this is a corrupt archive
+// rather than a large mesh: HSD has nine vertex attributes plus eight
+// texture coordinates.
+constexpr uint32_t kMaxVertexDescriptors = 64;
+
+// The display list HSD hands to GXCallDisplayList is stored in 32-byte units.
+constexpr uint32_t kDisplayListGranularity = 32;
 
 } // namespace
 
@@ -108,6 +166,283 @@ char* ArchiveConverter::read_string(uint32_t offset)
     return strings_.back().data();
 }
 
+const void* ArchiveConverter::raw_data(uint32_t offset, uint32_t* extent)
+{
+    const auto span = archive_.data_span(offset);
+    if (!span.has_value()) {
+        return nullptr;
+    }
+    if (extent != nullptr) {
+        *extent = span->remaining;
+    }
+    return span->bytes;
+}
+
+HSD_Material* ArchiveConverter::convert_material(uint32_t offset)
+{
+    const auto seen = materials_by_offset_.find(offset);
+    if (seen != materials_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kMaterialSize)) {
+        error_ = "material at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    // Three GXColors, each four bytes in the order r, g, b, a -- byte fields,
+    // so they cross unchanged.
+    const auto colour = [this, offset](uint32_t field, GXColor& out) {
+        out.r = *archive_.data_byte(offset + field + 0);
+        out.g = *archive_.data_byte(offset + field + 1);
+        out.b = *archive_.data_byte(offset + field + 2);
+        out.a = *archive_.data_byte(offset + field + 3);
+    };
+
+    materials_.emplace_back();
+    HSD_Material& host = materials_.back();
+    std::memset(&host, 0, sizeof host);
+    colour(kMaterialAmbient, host.ambient);
+    colour(kMaterialDiffuse, host.diffuse);
+    colour(kMaterialSpecular, host.specular);
+    host.alpha = *archive_.data_float(offset + kMaterialAlpha);
+    host.shininess = *archive_.data_float(offset + kMaterialShininess);
+
+    materials_by_offset_.emplace(offset, &host);
+    return &host;
+}
+
+HSD_VtxDescList* ArchiveConverter::convert_vertex_descriptors(uint32_t offset)
+{
+    // The list is an array terminated by a GX_VA_NULL attribute, not a linked
+    // list, so it converts as a block.  Every entry grows here: four enums
+    // that are int-sized either way, and a pointer that is not.
+    std::vector<HSD_VtxDescList> entries;
+    for (uint32_t index = 0; index <= kMaxVertexDescriptors; ++index) {
+        const uint32_t entry = offset + index * kVtxSize;
+        if (!archive_.contains_data_range(entry, kVtxSize)) {
+            error_ = "vertex descriptor list at offset " +
+                     std::to_string(offset) +
+                     " runs off the end of the data section";
+            return nullptr;
+        }
+
+        HSD_VtxDescList host{};
+        std::memset(&host, 0, sizeof host);
+        host.attr = static_cast<GXAttr>(*archive_.data_word(entry + kVtxAttr));
+        if (host.attr == GX_VA_NULL) {
+            entries.push_back(host);
+            vertex_descriptors_.push_back(std::move(entries));
+            return vertex_descriptors_.back().data();
+        }
+
+        host.attr_type =
+            static_cast<GXAttrType>(*archive_.data_word(entry + kVtxAttrType));
+        host.comp_cnt =
+            static_cast<GXCompCnt>(*archive_.data_word(entry + kVtxCompCnt));
+        host.comp_type =
+            static_cast<GXCompType>(*archive_.data_word(entry + kVtxCompType));
+        host.frac = *archive_.data_byte(entry + kVtxFrac);
+        host.stride =
+            static_cast<u16>((*archive_.data_byte(entry + kVtxStride) << 8) |
+                             *archive_.data_byte(entry + kVtxStride + 1));
+
+        const auto vertex = archive_.data_pointer(entry + kVtxVertex);
+        if (vertex.has_value() && *vertex != Archive::kNullOffset) {
+            uint32_t extent = 0;
+            host.vertex = const_cast<void*>(raw_data(*vertex, &extent));
+            if (host.vertex == nullptr) {
+                error_ = "vertex array at offset " + std::to_string(*vertex) +
+                         " lies outside the archive's data section";
+                return nullptr;
+            }
+            vertex_arrays_.push_back(VertexArray{ host.vertex, extent });
+        }
+        entries.push_back(host);
+    }
+
+    error_ = "vertex descriptor list at offset " + std::to_string(offset) +
+             " has no GX_VA_NULL terminator";
+    return nullptr;
+}
+
+HSD_PObjDesc* ArchiveConverter::convert_primitive(uint32_t offset)
+{
+    const auto seen = primitives_by_offset_.find(offset);
+    if (seen != primitives_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kPObjSize)) {
+        error_ = "primitive at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    primitives_.emplace_back();
+    HSD_PObjDesc& host = primitives_.back();
+    std::memset(&host, 0, sizeof host);
+    primitives_by_offset_.emplace(offset, &host);
+
+    host.flags = static_cast<u16>((*archive_.data_byte(offset + kPObjFlags)
+                                   << 8) |
+                                  *archive_.data_byte(offset + kPObjFlags + 1));
+    host.n_display =
+        static_cast<u16>((*archive_.data_byte(offset + kPObjDisplayCount) << 8) |
+                         *archive_.data_byte(offset + kPObjDisplayCount + 1));
+
+    const auto class_name = archive_.data_pointer(offset + kPObjClassName);
+    if (class_name.has_value() && *class_name != Archive::kNullOffset) {
+        host.class_name = read_string(*class_name);
+    }
+
+    const auto verts = archive_.data_pointer(offset + kPObjVerts);
+    if (verts.has_value() && *verts != Archive::kNullOffset) {
+        host.verts = convert_vertex_descriptors(*verts);
+        if (host.verts == nullptr) {
+            return nullptr;
+        }
+    }
+
+    // The display list is GX commands -- bytes, with no pointers in them --
+    // so it stays in the archive and is addressed where it lies.  n_display
+    // counts 32-byte units, which is how HSD stores it.
+    const auto display = archive_.data_pointer(offset + kPObjDisplay);
+    if (display.has_value() && *display != Archive::kNullOffset) {
+        const uint32_t length = host.n_display * kDisplayListGranularity;
+        if (!archive_.contains_data_range(*display, length)) {
+            error_ = "primitive at offset " + std::to_string(offset) +
+                     " has a display list running off the data section";
+            return nullptr;
+        }
+        host.display =
+            const_cast<u8*>(static_cast<const u8*>(raw_data(*display, nullptr)));
+    }
+
+    // The union at +0x14 is a joint, a shape set or an envelope table
+    // depending on the flags -- none of them converted yet.
+    const auto union_field = archive_.data_pointer(offset + kPObjUnion);
+    if (union_field.has_value() && *union_field != Archive::kNullOffset) {
+        note_unconverted(offset, *union_field, "HSD_PObjDesc::u");
+    }
+
+    const auto next = archive_.data_pointer(offset + kPObjNext);
+    if (next.has_value() && *next != Archive::kNullOffset) {
+        HSD_PObjDesc* following = convert_primitive(*next);
+        if (following == nullptr) {
+            return nullptr;
+        }
+        host.next = following;
+    }
+
+    return &host;
+}
+
+HSD_MObjDesc* ArchiveConverter::convert_material_object(uint32_t offset)
+{
+    const auto seen = material_objects_by_offset_.find(offset);
+    if (seen != material_objects_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kMObjSize)) {
+        error_ = "material object at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    material_objects_.emplace_back();
+    HSD_MObjDesc& host = material_objects_.back();
+    std::memset(&host, 0, sizeof host);
+    material_objects_by_offset_.emplace(offset, &host);
+
+    host.rendermode = *archive_.data_word(offset + kMObjRenderMode);
+
+    const auto class_name = archive_.data_pointer(offset + kMObjClassName);
+    if (class_name.has_value() && *class_name != Archive::kNullOffset) {
+        host.class_name = read_string(*class_name);
+    }
+
+    const auto material = archive_.data_pointer(offset + kMObjMaterial);
+    if (material.has_value() && *material != Archive::kNullOffset) {
+        host.mat = convert_material(*material);
+        if (host.mat == nullptr) {
+            return nullptr;
+        }
+    }
+
+    // Textures, the TEV render descriptor and the pixel-engine descriptor are
+    // the next three converters.  A material that names one is still usable
+    // without it -- it draws untextured -- so they are recorded, not refused.
+    const auto texdesc = archive_.data_pointer(offset + kMObjTexDesc);
+    if (texdesc.has_value() && *texdesc != Archive::kNullOffset) {
+        note_unconverted(offset, *texdesc, "HSD_TObjDesc");
+    }
+    const auto renderdesc = archive_.data_pointer(offset + kMObjRenderDesc);
+    if (renderdesc.has_value() && *renderdesc != Archive::kNullOffset) {
+        note_unconverted(offset, *renderdesc, "HSD_RenderDesc");
+    }
+    const auto pedesc = archive_.data_pointer(offset + kMObjPEDesc);
+    if (pedesc.has_value() && *pedesc != Archive::kNullOffset) {
+        note_unconverted(offset, *pedesc, "HSD_PEDesc");
+    }
+
+    return &host;
+}
+
+HSD_DObjDesc* ArchiveConverter::convert_display_object(uint32_t offset)
+{
+    const auto seen = display_objects_by_offset_.find(offset);
+    if (seen != display_objects_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kDObjSize)) {
+        error_ = "display object at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    // Registered before its fields are filled in, and the reference stays
+    // valid however much the deques grow: a chain that points back at this
+    // object has to find the address that was handed out, not a second copy.
+    display_objects_.emplace_back();
+    HSD_DObjDesc& host = display_objects_.back();
+    std::memset(&host, 0, sizeof host);
+    display_objects_by_offset_.emplace(offset, &host);
+
+    const auto class_name = archive_.data_pointer(offset + kDObjClassName);
+    if (class_name.has_value() && *class_name != Archive::kNullOffset) {
+        host.class_name = read_string(*class_name);
+    }
+
+    const auto mobjdesc = archive_.data_pointer(offset + kDObjMObjDesc);
+    if (mobjdesc.has_value() && *mobjdesc != Archive::kNullOffset) {
+        HSD_MObjDesc* material = convert_material_object(*mobjdesc);
+        if (material == nullptr) {
+            return nullptr;
+        }
+        host.mobjdesc = material;
+    }
+
+    const auto pobjdesc = archive_.data_pointer(offset + kDObjPObjDesc);
+    if (pobjdesc.has_value() && *pobjdesc != Archive::kNullOffset) {
+        HSD_PObjDesc* primitive = convert_primitive(*pobjdesc);
+        if (primitive == nullptr) {
+            return nullptr;
+        }
+        host.pobjdesc = primitive;
+    }
+
+    const auto next = archive_.data_pointer(offset + kDObjNext);
+    if (next.has_value() && *next != Archive::kNullOffset) {
+        HSD_DObjDesc* following = convert_display_object(*next);
+        if (following == nullptr) {
+            return nullptr;
+        }
+        host.next = following;
+    }
+
+    return &host;
+}
+
 void ArchiveConverter::note_unconverted(uint32_t holder, uint32_t target,
                                         const char* kind)
 {
@@ -160,6 +495,10 @@ HSD_Joint* ArchiveConverter::joint(uint32_t offset)
         HSD_Joint& host = joints_.back();
         std::memset(&host, 0, sizeof host);
         host.flags = *flags;
+        // Registered before its fields are filled in, and the reference
+        // stays valid however much the deques grow, so anything the
+        // conversion reaches that points back here finds this joint.
+        joints_by_offset_.emplace(current, &host);
 
         if (*class_name != Archive::kNullOffset) {
             host.class_name = read_string(*class_name);
@@ -187,20 +526,27 @@ HSD_Joint* ArchiveConverter::joint(uint32_t offset)
             }
         }
 
-        // The two structure kinds this converter does not build yet.  They
-        // are recorded rather than refused: the rest of the graph is correct,
-        // and a caller that needs them can see exactly what is missing.
+        // A joint's union is a display object, a spline, or a particle list,
+        // and which one the flags decide.  The display object is built; the
+        // other two are recorded rather than refused, because the rest of the
+        // graph is correct and a caller can see exactly what is missing.
         const auto union_field = archive_.data_pointer(current + kJointUnion);
-        if (union_field.has_value() &&
-            *union_field != Archive::kNullOffset) {
-            note_unconverted(current, *union_field, union_kind(*flags));
+        if (union_field.has_value() && *union_field != Archive::kNullOffset) {
+            if (union_is_display_object(*flags)) {
+                HSD_DObjDesc* display = convert_display_object(*union_field);
+                if (display == nullptr) {
+                    return nullptr;
+                }
+                host.u.dobjdesc = display;
+            } else {
+                note_unconverted(current, *union_field, union_kind(*flags));
+            }
         }
         const auto robjdesc = archive_.data_pointer(current + kJointRObjDesc);
         if (robjdesc.has_value() && *robjdesc != Archive::kNullOffset) {
             note_unconverted(current, *robjdesc, "HSD_RObjDesc");
         }
 
-        joints_by_offset_.emplace(current, &host);
         converted.push_back(current);
         if (*child != Archive::kNullOffset) {
             pending.push_back(*child);

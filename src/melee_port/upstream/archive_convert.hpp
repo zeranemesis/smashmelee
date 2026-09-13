@@ -23,7 +23,10 @@
 #include <melee/sysdolphin/baselib/archive.hpp>
 
 extern "C" {
+#include <sysdolphin/baselib/dobj.h>
 #include <sysdolphin/baselib/jobj.h>
+#include <sysdolphin/baselib/mobj.h>
+#include <sysdolphin/baselib/pobj.h>
 }
 
 namespace meleeboard::hsd {
@@ -51,6 +54,16 @@ public:
     ArchiveConverter(const ArchiveConverter&) = delete;
     ArchiveConverter& operator=(const ArchiveConverter&) = delete;
 
+    // Where a vertex array lives, and how much of it there is.  Vertex data
+    // is not a structure -- no pointers, no size change on a 64-bit host --
+    // so the converter leaves it in the archive and points at it.  It is
+    // still in the console's byte order, which is why this is reported rather
+    // than assumed: Aurora's GXSetArray wants to be told.
+    struct VertexArray {
+        const void* base = nullptr;
+        uint32_t extent = 0;
+    };
+
     // The joint at `offset`, with its children and siblings.  Null when the
     // archive holds no well-formed joint there, and error() says why.
     //
@@ -70,8 +83,25 @@ public:
     }
 
     std::size_t joint_count() const { return joints_.size(); }
+    std::size_t display_object_count() const { return display_objects_.size(); }
+    std::size_t primitive_count() const { return primitives_.size(); }
+
+    // Every vertex array the converted primitives point at, in the order it
+    // met them.  A renderer needs these to answer GXSetArray's extent and
+    // byte-order arguments; see include/melee/port/dolphin_compat.h.
+    const std::vector<VertexArray>& vertex_arrays() const
+    {
+        return vertex_arrays_;
+    }
 
 private:
+    HSD_DObjDesc* convert_display_object(uint32_t offset);
+    HSD_MObjDesc* convert_material_object(uint32_t offset);
+    HSD_PObjDesc* convert_primitive(uint32_t offset);
+    HSD_Material* convert_material(uint32_t offset);
+    HSD_VtxDescList* convert_vertex_descriptors(uint32_t offset);
+    const void* raw_data(uint32_t offset, uint32_t* extent);
+
     bool read_vector(uint32_t offset, Vec3& out);
     bool read_matrix(uint32_t offset, MtxPtr& out);
     char* read_string(uint32_t offset);
@@ -87,9 +117,19 @@ private:
     // Deques, because every address handed out has to stay put: the graph
     // points into this storage while it is still being built.
     std::deque<HSD_Joint> joints_;
+    std::deque<HSD_DObjDesc> display_objects_;
+    std::deque<HSD_MObjDesc> material_objects_;
+    std::deque<HSD_PObjDesc> primitives_;
+    std::deque<HSD_Material> materials_;
+    std::deque<std::vector<HSD_VtxDescList>> vertex_descriptors_;
     std::deque<std::string> strings_;
     std::deque<StoredMatrix> matrices_;
+    std::vector<VertexArray> vertex_arrays_;
     std::unordered_map<uint32_t, HSD_Joint*> joints_by_offset_;
+    std::unordered_map<uint32_t, HSD_DObjDesc*> display_objects_by_offset_;
+    std::unordered_map<uint32_t, HSD_MObjDesc*> material_objects_by_offset_;
+    std::unordered_map<uint32_t, HSD_PObjDesc*> primitives_by_offset_;
+    std::unordered_map<uint32_t, HSD_Material*> materials_by_offset_;
     std::vector<UnconvertedReference> unconverted_;
     std::string error_;
 };

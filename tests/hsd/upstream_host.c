@@ -108,27 +108,6 @@ long long OSGetTime(void)
 unsigned int VIGetNextField(void) { return 0; }
 
 
-// What Aurora's GXSetArray needs and the GameCube's did not.  The adapter in
-// include/melee/port/dolphin_compat.h routes upstream's three-argument calls
-// through these; the reasoning is there.
-//
-// Both answers below are placeholders, and deliberately visible ones: a
-// recorded trace shows the length as 0 and the byte order as big-endian, so a
-// test reads exactly what the port has not yet decided.  Nothing in this
-// target draws, so nothing depends on them being right yet.  A real renderer
-// does: the length has to come from the archive the array lives in, and the
-// byte order from whether that archive was converted on load.
-u32 melee_gx_array_extent(const void* base)
-{
-    (void) base;
-    return 0;
-}
-
-bool melee_gx_array_is_little_endian(const void* base)
-{
-    (void) base;
-    return false;
-}
 
 // The two pieces of HSD that live in units still at the boot boundary.
 //

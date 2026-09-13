@@ -1,5 +1,6 @@
 #include "harness.hpp"
 #include "dat_builder.hpp"
+#include "gx_record.hpp"
 
 // The first *32b converter, and the first time in this project that the
 // game's own loader is handed a real archive.
@@ -17,9 +18,11 @@
 #include <melee/sysdolphin/baselib/archive.hpp>
 
 #include "archive_convert.hpp"
+#include "gx_array_registry.hpp"
 
 extern "C" {
 #include <sysdolphin/baselib/aobj.h>
+#include <dolphin/mtx.h>
 #include <sysdolphin/baselib/displayfunc.h>
 #include <sysdolphin/baselib/fobj.h>
 #include <sysdolphin/baselib/id.h>
@@ -178,11 +181,15 @@ MELEE_TEST(UpstreamConvert, SeparatesARelocatedZeroFromANullPointer)
 
 MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
 {
-    // A joint with geometry.  The display object is not converted -- that is
-    // the next converter -- and the field is left null, but the reference is
-    // reported so nobody mistakes an unbuilt scene for an empty one.
+    // A material that names a texture.  Textures are the next converter, so
+    // the field is left null -- but the reference is reported, because a
+    // silently untextured model looks exactly like a broken renderer.
     DatBuilder builder;
+    const uint32_t texture = builder.allocate(0x5C);
+    const uint32_t material_object = builder.allocate(0x18);
+    builder.pointer(material_object + 0x08, texture);
     const uint32_t display_object = builder.allocate(0x10);
+    builder.pointer(display_object + 0x08, material_object);
     const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
     builder.pointer(joint + 0x10, display_object);
 
@@ -192,13 +199,40 @@ MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
     ArchiveConverter converter(archive);
     HSD_Joint* host = converter.joint(joint);
     REQUIRE(host != nullptr);
-    CHECK(host->u.dobjdesc == nullptr);
+    REQUIRE(host->u.dobjdesc != nullptr);
+    REQUIRE(host->u.dobjdesc->mobjdesc != nullptr);
+    CHECK(host->u.dobjdesc->mobjdesc->texdesc == nullptr);
 
     REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
-    CHECK_EQ(converter.unconverted()[0].holder, joint);
-    CHECK_EQ(converter.unconverted()[0].target, display_object);
+    CHECK_EQ(converter.unconverted()[0].holder, material_object);
+    CHECK_EQ(converter.unconverted()[0].target, texture);
     CHECK_EQ(std::string(converter.unconverted()[0].kind),
-             std::string("HSD_DObjDesc"));
+             std::string("HSD_TObjDesc"));
+}
+
+MELEE_TEST(UpstreamConvert, StillRecordsASplineJointAsUnconverted)
+{
+    // A joint whose union is a spline rather than a display object.  Which of
+    // the three the union holds is decided by the joint's flags, and only the
+    // display object is built.
+    DatBuilder builder;
+    const uint32_t spline = builder.allocate(0x18);
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    builder.u32(joint + 0x04, JOBJ_SPLINE);
+    builder.pointer(joint + 0x10, spline);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(joint);
+    REQUIRE(host != nullptr);
+    CHECK(host->u.spline == nullptr);
+
+    REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
+    CHECK_EQ(converter.unconverted()[0].target, spline);
+    CHECK_EQ(std::string(converter.unconverted()[0].kind),
+             std::string("HSD_Spline"));
 }
 
 MELEE_TEST(UpstreamConvert, RefusesAJointOutsideTheDataSection)
@@ -260,6 +294,250 @@ MELEE_TEST(UpstreamConvert, UpstreamsOwnLoaderAcceptsTheConvertedTree)
     CHECK_NEAR(world.x, 1.0, kTolerance);
     CHECK_NEAR(world.y, 5.0, kTolerance);
     CHECK_NEAR(world.z, 3.0, kTolerance);
+
+    HSD_JObjRemoveAll(jobj);
+}
+
+MELEE_TEST(UpstreamConvert, ConvertsAJointsDisplayObject)
+{
+    // The chain a joint with geometry hangs off: a display object, the
+    // material object beside it, and the primitive that carries the vertex
+    // descriptors and the display list.
+    DatBuilder builder;
+
+    const uint32_t vertices = builder.allocate(3 * 3 * 4);
+    const float positions[9] = { 0.0F, 0.0F, 0.0F, 1.0F, 0.0F,
+                                 0.0F, 0.0F, 1.0F, 0.0F };
+    for (uint32_t index = 0; index < 9; ++index) {
+        builder.f32(vertices + index * 4, positions[index]);
+    }
+
+    const uint32_t descriptors = builder.allocate(0x18 * 2);
+    builder.u32(descriptors + 0x00, 9); // GX_VA_POS
+    builder.u32(descriptors + 0x04, 2); // GX_INDEX8
+    builder.u32(descriptors + 0x08, 1); // GX_POS_XYZ
+    builder.u32(descriptors + 0x0C, 4); // GX_F32
+    builder.u16(descriptors + 0x12, 12);
+    builder.pointer(descriptors + 0x14, vertices);
+    builder.u32(descriptors + 0x18, 0xFF); // GX_VA_NULL terminator
+
+    const uint32_t display_list = builder.allocate(32, 32);
+    builder.u8(display_list + 0, 0x98); // GX_TRIANGLESTRIP | GX_VTXFMT0
+    builder.u8(display_list + 1, 0x00);
+    builder.u8(display_list + 2, 0x03); // three vertices
+    builder.u8(display_list + 3, 0x00);
+    builder.u8(display_list + 4, 0x01);
+    builder.u8(display_list + 5, 0x02);
+
+    const uint32_t material = builder.allocate(0x14);
+    builder.u8(material + 0x04, 0x11); // diffuse r
+    builder.u8(material + 0x05, 0x22);
+    builder.u8(material + 0x06, 0x33);
+    builder.u8(material + 0x07, 0x44);
+    builder.f32(material + 0x0C, 0.5F);  // alpha
+    builder.f32(material + 0x10, 50.0F); // shininess
+
+    const uint32_t material_object = builder.allocate(0x18);
+    builder.u32(material_object + 0x04, 0x1234); // rendermode
+    builder.pointer(material_object + 0x0C, material);
+
+    const uint32_t primitive = builder.allocate(0x18);
+    builder.pointer(primitive + 0x08, descriptors);
+    builder.u16(primitive + 0x0E, 1); // one 32-byte display-list unit
+    builder.pointer(primitive + 0x10, display_list);
+
+    const uint32_t display_object = builder.allocate(0x10);
+    builder.pointer(display_object + 0x08, material_object);
+    builder.pointer(display_object + 0x0C, primitive);
+
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    builder.pointer(joint + 0x10, display_object);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(joint);
+    REQUIRE(host != nullptr);
+    CHECK_EQ(converter.error(), std::string());
+
+    // Nothing in this model is now unconverted.
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
+
+    REQUIRE(host->u.dobjdesc != nullptr);
+    HSD_DObjDesc* dobj = host->u.dobjdesc;
+    CHECK(dobj->next == nullptr);
+
+    REQUIRE(dobj->mobjdesc != nullptr);
+    CHECK_EQ(dobj->mobjdesc->rendermode, 0x1234U);
+    REQUIRE(dobj->mobjdesc->mat != nullptr);
+    CHECK_EQ(dobj->mobjdesc->mat->diffuse.r, static_cast<u8>(0x11));
+    CHECK_EQ(dobj->mobjdesc->mat->diffuse.a, static_cast<u8>(0x44));
+    CHECK_NEAR(dobj->mobjdesc->mat->alpha, 0.5, kTolerance);
+    CHECK_NEAR(dobj->mobjdesc->mat->shininess, 50.0, kTolerance);
+
+    REQUIRE(dobj->pobjdesc != nullptr);
+    HSD_PObjDesc* pobj = dobj->pobjdesc;
+    CHECK_EQ(pobj->n_display, static_cast<u16>(1));
+    CHECK(pobj->display != nullptr);
+    CHECK_EQ(pobj->display[0], static_cast<u8>(0x98));
+
+    // The vertex descriptor list crossed as a block, terminator included.
+    REQUIRE(pobj->verts != nullptr);
+    CHECK_EQ(pobj->verts[0].attr, GX_VA_POS);
+    CHECK_EQ(pobj->verts[0].attr_type, GX_INDEX8);
+    CHECK_EQ(pobj->verts[0].comp_type, GX_F32);
+    CHECK_EQ(pobj->verts[0].stride, static_cast<u16>(12));
+    CHECK_EQ(pobj->verts[1].attr, GX_VA_NULL);
+
+    // Vertex data is not a structure, so it stays in the archive and is
+    // addressed where it lies -- still big-endian, which is why the extent
+    // and the byte order are reported rather than assumed.
+    REQUIRE_EQ(converter.vertex_arrays().size(), std::size_t(1));
+    CHECK(converter.vertex_arrays()[0].base == pobj->verts[0].vertex);
+    CHECK(converter.vertex_arrays()[0].extent >= 36U);
+}
+
+namespace {
+
+// The model the draw test uses: one joint, one display object, one material,
+// one indexed triangle strip of three vertices.  Returned as the joint's
+// offset in the archive `builder` is building.
+uint32_t add_triangle_model(DatBuilder& builder)
+{
+    const uint32_t vertices = builder.allocate(3 * 3 * 4);
+    const float positions[9] = { 0.0F, 0.0F, 0.0F, 1.0F, 0.0F,
+                                 0.0F, 0.0F, 1.0F, 0.0F };
+    for (uint32_t index = 0; index < 9; ++index) {
+        builder.f32(vertices + index * 4, positions[index]);
+    }
+
+    const uint32_t descriptors = builder.allocate(0x18 * 2);
+    builder.u32(descriptors + 0x00, 9); // GX_VA_POS
+    builder.u32(descriptors + 0x04, 2); // GX_INDEX8
+    builder.u32(descriptors + 0x08, 1); // GX_POS_XYZ
+    builder.u32(descriptors + 0x0C, 4); // GX_F32
+    builder.u16(descriptors + 0x12, 12);
+    builder.pointer(descriptors + 0x14, vertices);
+    builder.u32(descriptors + 0x18, 0xFF);
+
+    const uint32_t display_list = builder.allocate(32, 32);
+    builder.u8(display_list + 0, 0x98);
+    builder.u8(display_list + 2, 0x03);
+    builder.u8(display_list + 4, 0x01);
+    builder.u8(display_list + 5, 0x02);
+
+    const uint32_t material = builder.allocate(0x14);
+    builder.u8(material + 0x04, 0xFF);
+    builder.u8(material + 0x05, 0xFF);
+    builder.u8(material + 0x06, 0xFF);
+    builder.u8(material + 0x07, 0xFF);
+    builder.f32(material + 0x0C, 1.0F);
+    builder.f32(material + 0x10, 50.0F);
+
+    const uint32_t material_object = builder.allocate(0x18);
+    builder.pointer(material_object + 0x0C, material);
+
+    const uint32_t primitive = builder.allocate(0x18);
+    builder.pointer(primitive + 0x08, descriptors);
+    builder.u16(primitive + 0x0E, 1);
+    builder.pointer(primitive + 0x10, display_list);
+
+    const uint32_t display_object = builder.allocate(0x10);
+    builder.pointer(display_object + 0x08, material_object);
+    builder.pointer(display_object + 0x0C, primitive);
+
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    // JOBJ_OPA is the transparency bit HSD_JObjDispDObj tests before it will
+    // draw anything at all.
+    builder.u32(joint + 0x04, JOBJ_OPA);
+    builder.pointer(joint + 0x10, display_object);
+    return joint;
+}
+
+} // namespace
+
+MELEE_TEST(UpstreamConvert, DrawsAConvertedModelThroughTheGamesOwnDisplayPath)
+{
+    // The first frame in this project drawn by Melee's own code.
+    //
+    // An archive in the console's layout goes in; upstream's jobj, dobj, mobj
+    // and pobj walk it and talk to GX; and the recorder writes down what they
+    // said.  Nothing here is a reimplementation of anything.
+    init_object_pools();
+
+    DatBuilder builder;
+    const uint32_t joint = add_triangle_model(builder);
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* descriptor = converter.joint(joint);
+    REQUIRE(descriptor != nullptr);
+    REQUIRE_EQ(converter.unconverted().size(), std::size_t(0));
+
+    // The vertex arrays the converter found are what answer GXSetArray's two
+    // extra arguments.  Registering them is the caller's job, explicitly.
+    meleeboard::hsd::forget_vertex_arrays();
+    meleeboard::hsd::register_vertex_arrays(converter);
+
+    HSD_JObj* jobj = HSD_JObjLoadJoint(descriptor);
+    REQUIRE(jobj != nullptr);
+    REQUIRE(HSD_JObjGetDObj(jobj) != nullptr);
+
+    Mtx view;
+    PSMTXIdentity(view);
+
+    meleeboard::test::gx::reset();
+    HSD_JObjDisp(jobj, view, HSD_TRSP_OPA, 0);
+
+    // Something was drawn.
+    CHECK(!meleeboard::test::gx::trace().empty());
+    CHECK_EQ(meleeboard::test::gx::count("GXCallDisplayList"), 1U);
+
+    // The vertex array reached GX as the bytes in the archive, with the
+    // stride the descriptor named, the length the registry answered, and a
+    // byte order of big-endian -- because nothing converted the array, and
+    // Aurora's backend has to be told that.
+    REQUIRE_EQ(meleeboard::test::gx::count("GXSetArray"), 1U);
+    const std::string& set_array =
+        *meleeboard::test::gx::call("GXSetArray");
+    CHECK(set_array.find("GXSetArray(9, p") == 0);
+    const uint32_t extent = converter.vertex_arrays()[0].extent;
+    CHECK(set_array.find(", " + std::to_string(extent) + ", 12, 0)") !=
+          std::string::npos);
+    CHECK(extent >= 36U);
+
+    // The position matrix is the joint's, composed with the view -- the
+    // identity here, so the joint's own matrix reaches GX unchanged.
+    REQUIRE_EQ(meleeboard::test::gx::count("GXLoadPosMtxImm"), 1U);
+    CHECK_EQ(*meleeboard::test::gx::call("GXLoadPosMtxImm"),
+             std::string("GXLoadPosMtxImm([1 0 0 0 0 1 0 0 0 0 1 0], 0)"));
+
+    // And the frame in full, in order.  This is the golden trace phase 3 of
+    // docs/PLAN.md is built on: a TEV stage, the pixel-engine state, one
+    // lighting channel, the position matrix, the vertex binding, and the
+    // draw.  Every line of it came out of upstream's code.  If a change to
+    // the converter, the loader or the SDK boundary moves any of it, this is
+    // what says so.
+    std::string shape;
+    for (const std::string& name : meleeboard::test::gx::names()) {
+        if (!shape.empty()) {
+            shape += ' ';
+        }
+        shape += name;
+    }
+    CHECK_EQ(shape,
+             std::string("GXPixModeSync GXSetTevKColor GXSetTevColor "
+                         "GXPixModeSync GXSetTevOrder GXSetTevColorOp "
+                         "GXSetTevColorIn GXSetTevAlphaOp GXSetTevAlphaIn "
+                         "GXSetTevSwapMode GXSetTevKColorSel "
+                         "GXSetTevKAlphaSel GXSetColorUpdate GXSetBlendMode "
+                         "GXSetZMode GXSetZCompLoc GXSetAlphaCompare "
+                         "GXSetNumTevStages GXSetNumTexGens GXSetNumChans "
+                         "GXSetChanMatColor GXSetChanCtrl GXSetCurrentMtx "
+                         "GXLoadPosMtxImm GXSetArray GXClearVtxDesc "
+                         "GXSetVtxDesc GXSetVtxAttrFmt GXCallDisplayList"));
 
     HSD_JObjRemoveAll(jobj);
 }

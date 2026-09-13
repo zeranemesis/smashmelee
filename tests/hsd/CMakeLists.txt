@@ -190,6 +190,7 @@ else ()
             # the rest of src/melee_port/hsd they can link beside upstream's.
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/hsd/archive.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/archive_convert.cpp
+            ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/gx_array_registry.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_core.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_fobj.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_mtx.cpp

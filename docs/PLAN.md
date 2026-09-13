@@ -134,13 +134,12 @@ What remains for this phase:
 - `VI`'s retrace callbacks, bridged onto Aurora's swapchain and the 60 Hz
   clock;
 - the `DC`/`IC` cache operations, which are no-ops on a coherent host;
-- `GXSetArray`'s two extra arguments. The adapter is written (see phase 2),
-  but it asks `melee_gx_array_extent()` and
-  `melee_gx_array_is_little_endian()` for answers the offline suite does not
-  have to give. A renderer does: the length has to come from the archive the
-  vertex array lives in, and the byte order from whether that archive was
-  converted when it was loaded. Both are one function each, and both are
-  phase 3's to fill in.
+- ~~`GXSetArray`'s two extra arguments.~~ **Done.** The adapter is in the
+  prelude, and `src/melee_port/upstream/gx_array_registry.cpp` answers both
+  from what the load recorded: the extent from the archive the vertex array
+  lives in, and the byte order from whether anything converted it. Nothing
+  converts vertex data today, so the answer is the console's byte order — and
+  a recorded trace shows it.
 
 **On `OS` threads.** Melee runs DVD and audio work on OS threads with alarms
 and interrupt masking. This repository already vendors `libco`; cooperative
@@ -224,21 +223,55 @@ exists for.
 
 So `src/melee_port/upstream/archive_convert.cpp` reads through `Archive`,
 which carries the relocation table and answers `kNullOffset` for a field the
-table does not name. The bounds checks come along for free. The first
-converter — joints — is written and tested, and the test that matters hands
-its output to upstream's own `HSD_JObjLoadJoint`: on-disc bytes in, the game's
-joint tree out, with the matrices composing correctly. That is the mechanism
-the remaining ~34 structures follow.
+table does not name. The bounds checks come along for free.
 
-Two things the converter does that are not obvious and are load-bearing:
+**Six structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
+`HSD_MObjDesc`, `HSD_Material`, `HSD_PObjDesc` and `HSD_VtxDescList` — which
+is a whole model, and enough to draw. Raw data that is not a structure — a
+vertex array, a display list, a string, a matrix — has no pointers in it and
+no size change on a 64-bit host, so it stays in the archive and is addressed
+where it lies, through `Archive::data_span()`.
+
+Three properties are load-bearing rather than incidental:
 
 - **one on-disc structure gets exactly one host address.** HSD keys its ID
   table on a descriptor's address and reference-counts by identity, so a joint
   reached through two parents must not become two host objects;
-- **what it cannot build yet is recorded, not silently nulled.** A joint's
-  display object, spline or particle list is reported through `unconverted()`
-  with the offset and the kind. A null display object draws nothing and looks
-  exactly like a broken renderer; a list of them looks like what it is.
+- **what it cannot build yet is recorded, not silently nulled.** A texture, a
+  spline, a particle list or a pixel-engine descriptor is reported through
+  `unconverted()` with the offset and the kind. A null texture draws
+  untextured and looks exactly like a broken renderer; a list of them looks
+  like what it is;
+- **vertex arrays keep the console's byte order, and say so.**
+  `src/melee_port/upstream/gx_array_registry.cpp` records each array's extent
+  and byte order at load, which is what `GXSetArray`'s two extra arguments are
+  answered from. That closes the last item phase 1 left open on the SDK
+  boundary.
+
+### The first frame
+
+The test that matters is `UpstreamConvert.DrawsAConvertedModelThroughTheGamesOwnDisplayPath`.
+An archive in the console's layout goes in; upstream's `jobj`, `dobj`, `mobj`
+and `pobj` walk it and talk to GX; the recorder writes down what they said:
+
+```
+GXPixModeSync GXSetTevKColor GXSetTevColor GXPixModeSync GXSetTevOrder
+GXSetTevColorOp GXSetTevColorIn GXSetTevAlphaOp GXSetTevAlphaIn
+GXSetTevSwapMode GXSetTevKColorSel GXSetTevKAlphaSel GXSetColorUpdate
+GXSetBlendMode GXSetZMode GXSetZCompLoc GXSetAlphaCompare GXSetNumTevStages
+GXSetNumTexGens GXSetNumChans GXSetChanMatColor GXSetChanCtrl
+GXSetCurrentMtx GXLoadPosMtxImm GXSetArray GXClearVtxDesc GXSetVtxDesc
+GXSetVtxAttrFmt GXCallDisplayList
+```
+
+Twenty-nine calls: a TEV stage, the pixel-engine state, one lighting channel,
+the position matrix, the vertex binding and the draw. Nothing in it is a
+reimplementation. That sequence is asserted, so a change to the converter, the
+loader or the SDK boundary that moves any of it says so. It is also the
+mechanism phase 3 needs, arriving early — what remains for phase 3 is a real
+GX behind it and a window to put the result in.
+
+That is the mechanism the remaining ~29 structures follow.
 
 ### What the pointer work actually is
 
@@ -450,9 +483,11 @@ surface exists, and with it the whole scene-object layer.
 
 1. Decide the threading model and write it down (phase 1). Everything above
    phase 1 inherits it, and it is the only remaining design decision.
-2. Convert `HSD_DObjDesc` and `HSD_MObjDesc`, the two structures the joint
-   converter currently reports through `unconverted()` (phase 2). They are
-   what stands between a converted joint tree and a recorded draw.
+2. Convert `HSD_TObjDesc` and the image and palette descriptors under it
+   (phase 2) — the largest thing `unconverted()` still reports, and what
+   stands between a recorded draw and a *textured* one. The port's existing
+   `scene.cpp` already decodes all three, so the field offsets are known and
+   already covered by tests.
 3. Key the HSD ID table on archive offsets rather than descriptor addresses
    (phase 2) — nine of the fourteen remaining pointer casts, and the port's
    `id` unit already uses 32-bit keys, so this is a decision more than a

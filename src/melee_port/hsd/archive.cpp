@@ -211,6 +211,15 @@ std::optional<uint8_t> Archive::data_byte(uint32_t data_offset) const
     return bytes_[kHeaderSize + data_offset];
 }
 
+std::optional<Archive::DataSpan> Archive::data_span(uint32_t data_offset) const
+{
+    if (!contains_data_range(data_offset, 0)) {
+        return std::nullopt;
+    }
+    return DataSpan{ bytes_.data() + kHeaderSize + data_offset,
+                     data_size_ - data_offset };
+}
+
 std::optional<float> Archive::data_float(uint32_t data_offset) const
 {
     const auto bits = data_word(data_offset);

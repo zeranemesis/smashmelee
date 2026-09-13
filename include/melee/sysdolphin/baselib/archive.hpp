@@ -55,6 +55,26 @@ public:
     // rejected.
     std::optional<uint32_t> data_pointer(uint32_t field_offset) const;
     std::optional<float> data_float(uint32_t data_offset) const;
+
+    // The bytes at `data_offset`, addressed directly, and how many of them
+    // remain before the data section ends.
+    //
+    // This is the one place the archive hands out an address, and it is safe
+    // for exactly one thing: raw data that is not a structure -- a vertex
+    // array, a display list, a texture image, a string.  Those have no
+    // pointers in them, so their size and meaning do not change on a 64-bit
+    // host, and the GPU can read them where they lie.  Anything with a
+    // pointer field has to be converted instead; see
+    // src/melee_port/upstream/archive_convert.hpp.
+    //
+    // The bytes stay in the console's byte order.  A caller that hands them
+    // to the host's GX has to say so -- which is what Aurora's GXSetArray
+    // takes a little-endian flag for.
+    struct DataSpan {
+        const unsigned char* bytes = nullptr;
+        uint32_t remaining = 0;
+    };
+    std::optional<DataSpan> data_span(uint32_t data_offset) const;
     std::optional<SceneRoots> scene_roots(std::string_view symbol) const;
     std::optional<uint32_t> scene_model_count(std::string_view symbol) const;
     std::optional<uint32_t> scene_joint_count(std::string_view symbol) const;

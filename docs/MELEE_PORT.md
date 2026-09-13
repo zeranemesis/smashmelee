@@ -178,6 +178,18 @@ order.
       pointer field is not self-describing: a stored zero is the first byte of
       the data section or a null pointer depending on a relocation table in a
       different part of the file, and a wire struct cannot tell those apart;
+- [x] convert the rest of a model — `HSD_DObjDesc`, `HSD_MObjDesc`,
+      `HSD_Material`, `HSD_PObjDesc` and `HSD_VtxDescList` — and **draw it
+      through the game's own display path**.  A DAT in the console's layout
+      goes in, upstream's `jobj`, `dobj`, `mobj` and `pobj` walk it and talk
+      to GX, and the recorder captures twenty-nine calls: a TEV stage, the
+      pixel-engine state, a lighting channel, the position matrix, the vertex
+      binding and the draw.  The sequence is asserted, which makes it the
+      golden trace phase 3 is built on;
+- [x] answer `GXSetArray`'s extent and byte order from what the load
+      recorded, in `src/melee_port/upstream/gx_array_registry.cpp`.  Vertex
+      data is not a structure, so it stays in the archive in the console's
+      byte order, and Aurora's backend is told so rather than left to guess;
 - [x] adapt `GXSetArray`.  Aurora's `TARGET_PC` form takes the array's byte
       length and byte order as well, because it writes a 64-bit base into the
       command stream and the backend copies the array out instead of reading
