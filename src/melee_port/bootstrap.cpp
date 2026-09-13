@@ -110,9 +110,12 @@ extern "C" int game_main(void)
     meleeboard::hsd::HostAnimation menu_panel_animation;
     meleeboard::hsd::HostScene menu_content;
     meleeboard::hsd::HostAnimation menu_content_animation;
+    std::array<meleeboard::hsd::HostScene, 5> menu_cursors;
+    meleeboard::hsd::HostAnimation menu_cursor_animation;
     bool menu_ready = false;
     bool menu_panel_ready = false;
     bool menu_content_ready = false;
+    bool menu_cursors_ready = false;
     std::vector<unsigned char> menu_bytes;
     if (meleeboard::disc::read_file("MnMaAll.dat", menu_bytes)) {
         meleeboard::hsd::Archive menu_archive;
@@ -157,6 +160,23 @@ extern "C" int game_main(void)
                 menu_content_animation.joints().size(), content_joints.value_or(0),
                 menu_content.draw_objects().size(),
                 menu_content_ready ? "choices decoded" : menu_content.last_error());
+            const auto cursor_joints =
+                menu_archive.joint_tree_count("MenMainCursor_Top_joint");
+            menu_cursors_ready = menu_cursor_animation.load(
+                    menu_archive, "MenMainCursor_Top_animjoint") &&
+                cursor_joints.has_value() &&
+                *cursor_joints == menu_cursor_animation.joints().size();
+            for (auto& cursor : menu_cursors) {
+                menu_cursors_ready = menu_cursors_ready &&
+                    cursor.load_joint(menu_archive, "MenMainCursor_Top_joint") &&
+                    cursor.load_camera(menu_archive, "ScMenMain_cam_int1_camera");
+            }
+            MeleeBootstrapLog.info(
+                "MnMaAll.dat main-menu cursor: {} animation joints, {} model joints, {} draw objects ({})",
+                menu_cursor_animation.joints().size(), cursor_joints.value_or(0),
+                menu_cursors.front().draw_objects().size(),
+                menu_cursors_ready ? "five instances decoded" :
+                                     menu_cursors.front().last_error());
         } else {
             MeleeBootstrapLog.warn(
                 "Could not materialize MnMaAll.dat's MenMainBack animation");
@@ -185,6 +205,7 @@ extern "C" int game_main(void)
     meleeboard::hsd::HostAnimationPlayer menu_player;
     meleeboard::hsd::HostAnimationPlayer menu_panel_player;
     meleeboard::hsd::HostAnimationPlayer menu_content_player;
+    std::array<meleeboard::hsd::HostAnimationPlayer, 5> menu_cursor_players;
     if (menu_ready) {
         std::vector<uint32_t> mapping(menu_animation.joints().size());
         for (uint32_t index = 0; index < mapping.size(); ++index) {
@@ -213,6 +234,21 @@ extern "C" int game_main(void)
         // mn_8022B3A0 applies selection zero's hover loop to traversal node 14.
         menu_content_ready = menu_content_ready &&
             menu_content_player.request_subtree(14, 0.0F);
+        for (uint32_t option = 0; option < kMainMenuNames.size(); ++option) {
+            menu_content_ready = menu_content_ready &&
+                menu_content_player.request_joint(4 + option, 5.0F);
+        }
+    }
+    if (menu_cursors_ready) {
+        for (uint32_t option = 0; option < menu_cursors.size(); ++option) {
+            std::vector<uint32_t> mapping(menu_cursor_animation.joints().size());
+            for (uint32_t index = 0; index < mapping.size(); ++index) {
+                mapping[index] = index;
+            }
+            menu_cursors_ready = menu_cursors_ready &&
+                menu_cursor_players[option].attach(
+                    menu_cursor_animation, menu_cursors[option].joints(), mapping);
+        }
     }
     MeleeBootstrapLog.info(
         "Mounted {}; materialized standScene with {} models, {} joints, {} draw objects, {} materials, and {} direct textures (M={:#x} C={:#x} L={:#x} F={:#x}); entering bootstrap loop",
@@ -225,6 +261,8 @@ extern "C" int game_main(void)
     meleeboard::hsd::MeleeSceneRenderer scene_renderer(displayed_scene);
     std::unique_ptr<meleeboard::hsd::MeleeSceneRenderer> panel_renderer;
     std::unique_ptr<meleeboard::hsd::MeleeSceneRenderer> content_renderer;
+    std::array<std::unique_ptr<meleeboard::hsd::MeleeSceneRenderer>, 5>
+        cursor_renderers;
     if (menu_ready && menu_panel_ready) {
         panel_renderer =
             std::make_unique<meleeboard::hsd::MeleeSceneRenderer>(menu_panel);
@@ -237,6 +275,18 @@ extern "C" int game_main(void)
             content_renderer->drawable_object_count(),
             content_renderer->skipped_object_count(),
             content_renderer->submitted_triangle_count());
+    }
+    if (menu_ready && menu_content_ready && menu_cursors_ready) {
+        for (uint32_t option = 0; option < menu_cursors.size(); ++option) {
+            cursor_renderers[option] =
+                std::make_unique<meleeboard::hsd::MeleeSceneRenderer>(
+                    menu_cursors[option]);
+            cursor_renderers[option]->attach_roots_to(menu_content, 4 + option);
+        }
+        MeleeBootstrapLog.info(
+            "MenMainCursor renderers: 5 instances, {} drawable objects each, {} triangles each",
+            cursor_renderers.front()->drawable_object_count(),
+            cursor_renderers.front()->submitted_triangle_count());
     }
     MeleeBootstrapLog.info(
         "{} renderer: {} drawable objects, {} skipped objects, {} triangles",
@@ -257,6 +307,26 @@ extern "C" int game_main(void)
     MainMenuInput menu_input;
     uint32_t hover_ticks = 0;
     PADInit();
+    const auto configure_cursors = [&](uint8_t selected) {
+        if (!menu_cursors_ready) return;
+        for (uint32_t option = 0; option < menu_cursor_players.size(); ++option) {
+            auto& player = menu_cursor_players[option];
+            const bool hovered = option == selected;
+            player.request_joint(2, hovered ? 50.0F : 0.0F);
+            player.request_subtree(3, hovered ? 1.0F : 0.0F);
+            player.request_joint(3, static_cast<float>(option * 2));
+            player.request_subtree(4, hovered ? 50.0F : 49.0F);
+            player.request_joint(9, 0.0F);
+            player.set_subtree_hidden(9, !hovered);
+            player.set_subtree_hidden(11, !hovered);
+            // HSD_JObjAnim/HSD_JObjAnimAll are immediate in mn_8022B3A0.
+            // Apply the requested cursor pose once; continuously advancing
+            // every attached AObj would animate dormant branches that the
+            // original scene process leaves stopped.
+            player.tick();
+        }
+    };
+    configure_cursors(menu_input.selection);
 
     while (PartyBoard_IsRunning) {
         const AuroraEvent* event = aurora_update();
@@ -299,6 +369,7 @@ extern "C" int game_main(void)
                     const float start_frame =
                         static_cast<float>(menu_input.selection) * 50.0F;
                     menu_content_player.request_subtree(14, start_frame);
+                    configure_cursors(menu_input.selection);
                     const std::string title = std::string("Melee native port - ") +
                         kMainMenuNames[menu_input.selection];
                     VISetWindowTitle(title.c_str());
@@ -334,6 +405,9 @@ extern "C" int game_main(void)
         }
         if (content_renderer != nullptr) {
             content_renderer->render();
+        }
+        for (const auto& renderer : cursor_renderers) {
+            if (renderer != nullptr) renderer->render();
         }
         aurora_end_frame();
     }

@@ -155,6 +155,38 @@ void apply_camera_viewport(const HostCamera& camera)
     }
 }
 
+bool world_at_preorder(const HostScene& scene, uint32_t target, Matrix& result)
+{
+    const auto& joints = scene.joints();
+    std::unordered_map<uint32_t, uint32_t> joint_by_source;
+    for (uint32_t index = 0; index < joints.size(); ++index) {
+        joint_by_source.emplace(joints[index].source_offset, index);
+    }
+    std::vector<bool> visited(joints.size(), false);
+    uint32_t traversal = 0;
+    const auto visit = [&](auto&& self, int32_t index,
+                           const Matrix& parent) -> bool {
+        if (index < 0 || static_cast<size_t>(index) >= joints.size() ||
+            visited[static_cast<size_t>(index)]) return false;
+        visited[static_cast<size_t>(index)] = true;
+        const Matrix world = multiply(parent, local_matrix(joints[index]));
+        if (traversal++ == target) {
+            result = world;
+            return true;
+        }
+        if (self(self, joints[index].child, world)) return true;
+        return self(self, joints[index].sibling, parent);
+    };
+    for (uint32_t root : scene.model_roots()) {
+        const auto found = joint_by_source.find(root);
+        if (found != joint_by_source.end() &&
+            visit(visit, static_cast<int32_t>(found->second), identity())) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 MeleeSceneRenderer::MeleeSceneRenderer(const HostScene& scene) : scene_(scene)
@@ -170,6 +202,13 @@ MeleeSceneRenderer::MeleeSceneRenderer(const HostScene& scene) : scene_(scene)
     }
 }
 
+void MeleeSceneRenderer::attach_roots_to(const HostScene& parent,
+                                         uint32_t traversal_index)
+{
+    parent_scene_ = &parent;
+    parent_traversal_index_ = traversal_index;
+}
+
 void MeleeSceneRenderer::render()
 {
     const auto& joints = scene_.joints();
@@ -180,6 +219,10 @@ void MeleeSceneRenderer::render()
         joint_by_source.emplace(joints[index].source_offset, index);
     }
 
+    Matrix root_parent = identity();
+    if (parent_scene_ != nullptr) {
+        world_at_preorder(*parent_scene_, parent_traversal_index_, root_parent);
+    }
     std::vector<Matrix> worlds(joints.size(), identity());
     std::vector<int32_t> object_owner(objects.size(), -1);
     std::vector<bool> visited(joints.size(), false);
@@ -207,7 +250,7 @@ void MeleeSceneRenderer::render()
     for (uint32_t root : scene_.model_roots()) {
         const auto found = joint_by_source.find(root);
         if (found != joint_by_source.end()) {
-            visit(visit, static_cast<int32_t>(found->second), identity());
+            visit(visit, static_cast<int32_t>(found->second), root_parent);
         }
     }
 

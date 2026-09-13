@@ -70,6 +70,12 @@ Aurora already provides host implementations for much of the Dolphin SDK boundar
       the original layer containing the five top-level menu choices;
 - [x] read Aurora PAD/keyboard state at 60 Hz and drive the top-level hover
       animation ranges from `mn_803EB3FC` with D-pad or analog-stick input;
+- [x] instantiate the five original `MenMainCursor_Top` hierarchies, attach
+      them to the animated option joints, and reproduce the joint selection
+      poses and visibility rules from `mn_8022B3A0`;
+- [x] keep HSD AObj/FObj allocators process-global while multiple animation
+      players are alive; this is covered by a two-player materialization
+      regression and a 90-second MSVC AddressSanitizer menu smoke test;
 - [x] establish an HSD logical NTSC render mode and GX frame-state bridge over
       Aurora's host swapchain;
 - [x] advance the host HSD/GObj simulation on a bounded fixed 60 Hz clock,

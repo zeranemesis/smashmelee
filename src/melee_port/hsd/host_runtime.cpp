@@ -75,6 +75,11 @@ void write_be_float(std::vector<unsigned char>& bytes, size_t offset, float valu
 
 bool verify_animation_materialization()
 {
+    // Allocators are process-global in HSD. Initialize them once before any
+    // players exist; attaching another player must not invalidate the first.
+    HSD_AObjInitAllocData();
+    HSD_FObjInitAllocData();
+
     constexpr size_t kHeaderSize = 0x20;
     constexpr size_t kDataSize = 0x80;
     constexpr size_t kRelocationCount = 3;
@@ -129,13 +134,18 @@ bool verify_animation_materialization()
             std::vector<uint8_t>{ HSD_A_OP_CON, 0x10, 7, 1, 9, 1 })) {
         return false;
     }
-    std::vector<HostJoint> joints(1);
-    HostAnimationPlayer player;
-    if (!player.attach(animation, joints, { 0 })) {
+    std::vector<HostJoint> first_joints(1);
+    std::vector<HostJoint> second_joints(1);
+    HostAnimationPlayer first_player;
+    HostAnimationPlayer second_player;
+    if (!first_player.attach(animation, first_joints, { 0 }) ||
+        !second_player.attach(animation, second_joints, { 0 })) {
         return false;
     }
-    player.tick();
-    return joints.front().translation[0] == 7.0F;
+    first_player.tick();
+    second_player.tick();
+    return first_joints.front().translation[0] == 7.0F &&
+        second_joints.front().translation[0] == 7.0F;
 }
 
 bool verify_gobj_scheduler()
@@ -329,6 +339,11 @@ bool initialize_host_runtime()
           verify_aobj_runtime() && verify_animation_materialization())) {
         return false;
     }
+
+    // The verifier above owns no objects after it returns. Establish the
+    // allocator state used by every subsequent, concurrently alive player.
+    HSD_AObjInitAllocData();
+    HSD_FObjInitAllocData();
 
     if (!initialize_video()) {
         return false;
