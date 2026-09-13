@@ -108,13 +108,19 @@ function(melee_upstream_configure target)
             # arrives after some other header pulled <math.h> in has no effect.
             _USE_MATH_DEFINES)
 
-    # Upstream's C is force-fed the prelude.  On MSVC the flags are not
-    # gated by language: the Visual Studio generator does not reliably honour
-    # COMPILE_LANGUAGE in target_compile_options, and a unit that needed the
-    # prelude (spline.c, for Vec3) compiled without it while the units that
-    # did not need it passed.  The prelude is C-compatible and carries an
-    # include guard, so applying it to the C++ sources as well is harmless --
-    # they include it explicitly anyway.
+    # Every translation unit is force-fed the prelude, C and C++ alike.
+    #
+    # It started out gated on $<COMPILE_LANGUAGE:C>, which the Visual Studio
+    # generator does not honour, so MSVC applied it to C++ and the others did
+    # not -- and a header that reaches one toolchain's C++ and not another's
+    # is a bug that can only surface in CI.  It did: the prelude's GXSetArray
+    # adapter is a function-like macro, and on MSVC alone it reached the file
+    # that defines Aurora's real GXSetArray and mangled the definition.
+    #
+    # So the gate is gone rather than repaired.  One behavior everywhere means
+    # the Linux jobs can find this class of problem before Windows does.  The
+    # prelude is C-compatible and carries an include guard; the C++ sources
+    # include it explicitly anyway.
     if (MSVC)
         target_compile_options(${target} PRIVATE
                 /FI${prelude}
@@ -122,7 +128,7 @@ function(melee_upstream_configure target)
                 /wd4013 /wd4133 /wd4244 /wd4267)
     else ()
         target_compile_options(${target} PRIVATE
-                $<$<COMPILE_LANGUAGE:C>:-include$<SEMICOLON>${prelude}>
+                -include${prelude}
                 $<$<COMPILE_LANGUAGE:C>:-Wno-incompatible-function-pointer-types>
                 $<$<COMPILE_LANGUAGE:C>:-Wno-implicit-function-declaration>)
     endif ()

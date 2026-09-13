@@ -30,6 +30,17 @@
 // puts them in the right order.
 #include <dolphin/gx.h>
 
+// include/melee/port/dolphin_compat.h adapts upstream's three-argument
+// GXSetArray onto Aurora's five with a function-like macro.  This file *is*
+// Aurora's five-argument function, so it needs the name back -- a macro
+// applied to a definition mangles it.  That only bites where the prelude
+// reaches C++, which on MSVC is everywhere, because the Visual Studio
+// generator does not honour a language gate on the force-include.  It is the
+// one file in the project with any business undefining this.
+#ifdef GXSetArray
+#undef GXSetArray
+#endif
+
 namespace {
 
 std::vector<std::string> g_trace;

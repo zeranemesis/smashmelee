@@ -168,6 +168,16 @@ order.
       units** in all.  Setting a camera current now records a viewport, a
       scissor and the console's own perspective matrix, and the suite asserts
       the shape of that frame as text and its computed terms with a tolerance;
+- [x] write the first on-disc converter,
+      `src/melee_port/upstream/archive_convert.cpp`, and feed its output to
+      upstream's own loader: a DAT built in the console's layout —
+      big-endian, 32-bit offsets, explicit relocation table — becomes host
+      `HSD_Joint` structures, and `HSD_JObjLoadJoint` builds the game's joint
+      tree out of them, with the matrices composing.  It reads through
+      `Archive` rather than through a `<Name>32b` wire struct, because an HSD
+      pointer field is not self-describing: a stored zero is the first byte of
+      the data section or a null pointer depending on a relocation table in a
+      different part of the file, and a wire struct cannot tell those apart;
 - [x] adapt `GXSetArray`.  Aurora's `TARGET_PC` form takes the array's byte
       length and byte order as well, because it writes a 64-bit base into the
       command stream and the backend copies the array out instead of reading

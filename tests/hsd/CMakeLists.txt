@@ -180,9 +180,16 @@ else ()
 
     add_executable(melee_hsd_upstream_tests
             ${CMAKE_CURRENT_LIST_DIR}/harness.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/dat_builder.cpp
             ${CMAKE_CURRENT_LIST_DIR}/gx_record.cpp
             ${CMAKE_CURRENT_LIST_DIR}/gx_texture_stub.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_convert.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_scene.cpp
+            # The archive reader and the converter that builds host-sized
+            # structures from it.  Neither defines an HSD symbol, so unlike
+            # the rest of src/melee_port/hsd they can link beside upstream's.
+            ${MELEE_HSD_TESTS_ROOT}/src/melee_port/hsd/archive.cpp
+            ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/archive_convert.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_core.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_fobj.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_mtx.cpp
@@ -195,7 +202,8 @@ else ()
             ${MELEE_AURORA_MATH}
     )
     target_include_directories(melee_hsd_upstream_tests PRIVATE
-            ${CMAKE_CURRENT_LIST_DIR})
+            ${CMAKE_CURRENT_LIST_DIR}
+            ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream)
     melee_upstream_configure(melee_hsd_upstream_tests)
 
     if (MSVC)

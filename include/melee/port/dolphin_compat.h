@@ -115,8 +115,16 @@ typedef enum _GXTevClampMode {
 // answer is owed; see the definitions for what is answered today.
 #ifndef MELEE_COMPAT_GX_SET_ARRAY
 #define MELEE_COMPAT_GX_SET_ARRAY
+// Defined in C, and this header reaches C++ too, so the linkage is spelled
+// out rather than left to whichever language happens to be compiling.
+#ifdef __cplusplus
+extern "C" {
+#endif
 u32 melee_gx_array_extent(const void* base);
 bool melee_gx_array_is_little_endian(const void* base);
+#ifdef __cplusplus
+}
+#endif
 #define GXSetArray(attr, base, stride)                                         \
     GXSetArray((attr), (base), melee_gx_array_extent(base), (stride),          \
                melee_gx_array_is_little_endian(base))

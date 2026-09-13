@@ -159,10 +159,11 @@ threading model, which is the one genuinely design-sensitive piece.
 **Objective.** `src/melee_port/hsd/` is gone, and upstream's
 `sysdolphin/baselib` is doing the work, with the offline suite unchanged.
 
-1. Write `HSD_*32b` wire twins and `byteswap_hsd_*()` converters for the ~35
-   on-disc structures, following `src/port/byteswap.cpp`. The existing
+1. Convert the ~35 on-disc structures into host-sized ones. The existing
    decoders in `scene.cpp` and `animation.cpp` are the specification: every
    field offset they read is already correct and already covered by tests.
+   **This does not take the shape this plan first expected** — see *Why there
+   are no wire structs* below.
 2. Replace unit by unit, keeping the suite green at each step:
    `objalloc` → `class`/`object` → `list`/`id` → `mtx` → `fobj`/`aobj` →
    `jobj` → `dobj`/`mobj`/`tobj`/`pobj` → `cobj`/`lobj`/`fog` → `robj` →
@@ -204,6 +205,40 @@ it reaches for the OS arena and heap, which is phase 1's work, and until it
 arrives the suite supplies the two things it owns — `HSD_GetCurrentRenderPass`
 and, from `video`, `HSD_VIData` — from `tests/hsd/upstream_host.c`. Both are
 written to collide deliberately: the day those units join, the linker says so.
+
+### Why there are no wire structs
+
+The plan called for `<Name>32b` structs laid over the archive's bytes with
+big-endian fields, and `byteswap_<name>()` copying them into the host
+structure, following `src/port/byteswap.cpp`. For Melee's containers that
+shape cannot express the data.
+
+**An HSD pointer field is not self-describing.** The console's loader adds the
+data section's base to every field named in the archive's *relocation table*
+and leaves every other field alone. A pointer field holding zero is therefore
+the first byte of the data section when the table names it, and NULL when it
+does not — identical in the struct, different only in a table stored
+elsewhere in the file. A wire struct cannot tell them apart. This port already
+had that defect once and fixed it, which is what `Archive::kNullOffset`
+exists for.
+
+So `src/melee_port/upstream/archive_convert.cpp` reads through `Archive`,
+which carries the relocation table and answers `kNullOffset` for a field the
+table does not name. The bounds checks come along for free. The first
+converter — joints — is written and tested, and the test that matters hands
+its output to upstream's own `HSD_JObjLoadJoint`: on-disc bytes in, the game's
+joint tree out, with the matrices composing correctly. That is the mechanism
+the remaining ~34 structures follow.
+
+Two things the converter does that are not obvious and are load-bearing:
+
+- **one on-disc structure gets exactly one host address.** HSD keys its ID
+  table on a descriptor's address and reference-counts by identity, so a joint
+  reached through two parents must not become two host objects;
+- **what it cannot build yet is recorded, not silently nulled.** A joint's
+  display object, spline or particle list is reported through `unconverted()`
+  with the offset and the kind. A null display object draws nothing and looks
+  exactly like a broken renderer; a list of them looks like what it is.
 
 ### What the pointer work actually is
 
@@ -415,10 +450,9 @@ surface exists, and with it the whole scene-object layer.
 
 1. Decide the threading model and write it down (phase 1). Everything above
    phase 1 inherits it, and it is the only remaining design decision.
-2. Write `HSD_Joint32b` and `byteswap_hsd_joint()`, and check it against
-   `HostScene`'s existing joint decode (phase 2) — the first converter, with
-   its oracle already in the repository, and now with upstream's `jobj`
-   running beside it to answer to.
+2. Convert `HSD_DObjDesc` and `HSD_MObjDesc`, the two structures the joint
+   converter currently reports through `unconverted()` (phase 2). They are
+   what stands between a converted joint tree and a recorded draw.
 3. Key the HSD ID table on archive offsets rather than descriptor addresses
    (phase 2) — nine of the fourteen remaining pointer casts, and the port's
    `id` unit already uses 32-bit keys, so this is a decision more than a
