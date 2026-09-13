@@ -198,6 +198,32 @@ A 32-bit measurement was attempted and is not reported: this container has no
 32-bit libc headers, so the run failed for an environment reason and says
 nothing about the code.
 
+## Sizing the conversion
+
+A name-based scan of `sysdolphin/baselib`'s headers finds 31 `*Desc`
+structures carrying 70 pointer fields between them, plus the handful of
+on-disc types that do not use that suffix — `HSD_Joint`, `HSD_AnimJoint`,
+`HSD_Image`, `HSD_Tlut`, `HSD_Material`. Call it on the order of 35
+structures and 80 fields. Those are exactly the structures that need a
+`*32b` twin and a converter, and Mario Party's equivalent came to 1,087 lines.
+
+`HSD_Joint` is worth looking at, because it is the one the port already
+decodes:
+
+```c
+typedef struct HSD_Joint {
+    /* +0 */ char* class_name;      /* +14 */ Vec3 rotation;
+    /* +4 */ u32 flags;             /* +20 */ Vec3 scale;
+    /* +8 */ HSD_Joint* child;      /* +2C */ Vec3 position;
+    /* +C */ HSD_Joint* next;       /* +38 */ MtxPtr mtx;
+    /* +10 */ union { ... } u;      /* +3C */ HSD_RObjDesc* robjdesc;
+} HSD_Joint;
+```
+
+Every offset there is one `HostScene::load_internal` already reads. The work
+is not discovering the layout — that is done — it is expressing it as the
+structure upstream's own code expects rather than as a new host type.
+
 ## Standing recommendation
 
 Keep the current host-decoding architecture for now — it is what renders
