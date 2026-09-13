@@ -107,23 +107,30 @@ then overlaid directly on that data. Widening every pointer to 64 bits moves
 every field after it, which is precisely why this port decodes archives into
 host-owned structures instead.
 
-Two ways out, with their real costs:
+This repository has already solved exactly that problem once, for Mario
+Party 4. `include/port/byteswap.h` and `src/port/byteswap.cpp` — about 1,450
+lines — carry the pattern:
 
-- **Compile the game code for a 32-bit target.** Pointer width matches the
-  console, the layout assertions hold, and in-place relocation becomes
-  possible again. Byte order is still wrong — DAT data is big-endian — so
-  every multi-word read still has to be swapped, either at load time or at
-  each access. Cost: a 32-bit build of the host runtime too, on every
-  platform that must ship.
-- **Compile for 64-bit and drop the in-place model.** Archives are decoded
-  into host-owned structures, as the port does today, and the layout
-  assertions are disabled for the host build. Cost: every HSD structure the
-  game touches needs a host-side counterpart and a decoder.
+- the decompiled game is compiled natively at **64 bits**;
+- every on-disc structure gets a `<Name>32b` twin whose pointer fields are
+  `u32`, matching the console layout exactly;
+- a `byteswap_<name>()` converts a wire record into the host-width structure
+  at load time, allocated from the game's own heap;
+- the ~114 conversion sites in the game code sit behind `#ifdef BYTESWAPPING`.
 
-A 32-bit measurement was attempted and is not reported here: this container
-has no 32-bit libc headers, so the run failed for an environment reason and
-says nothing about the code. Re-run the spike with `--cc "clang -m32"` on a
-machine with `gcc-multilib` installed before treating that option as viable.
+`AnimData32b`, `HsfCluster32b`, and `HsfAttribute32b` are what that looks like
+in practice. The game code above the conversion uses host-width pointers and
+does not know the difference.
+
+So the fork is narrower than it first appears. A 32-bit build would preserve
+the struct layout, but byte order is still wrong — DAT data is big-endian —
+so a conversion pass is needed either way. Given that, 32 bits buys layout
+compatibility at the cost of a 32-bit host runtime on every shipping
+platform, while the byteswap-and-widen route is already proven here.
+
+A 32-bit measurement was attempted and is not reported: this container has no
+32-bit libc headers, so the run failed for an environment reason and says
+nothing about the code.
 
 ## Standing recommendation
 
