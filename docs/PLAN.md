@@ -51,11 +51,69 @@ reimplemented. The rest of the sequencing still holds.
 ## Where the port is today
 
 - A native shell mounts a GALE01 v1.02 image and exposes its filesystem.
-- A hand-written HSD subset decodes and renders original main-menu geometry
-  through Aurora GX, with joint animation at a fixed 60 Hz.
-- An offline suite (`tests/hsd`, 61 cases) pins that subset's behavior and
-  runs in CI on GCC with sanitizers, Clang, and MSVC.
-- The `bootstrap.cpp` menu flow is hand-written, not the game's own.
+- **35 of the 76 `sysdolphin/baselib` units** — upstream's own HSD, unmodified
+  — compile, link and answer behavioral assertions: the object and class
+  model, animation, the archive loader, and the entire render half (`jobj`,
+  `dobj`, `mobj`, `pobj`, `tobj`, `cobj`, `lobj`, `tev`, `texp`, `state`,
+  `shadow`, `robj`, `wobj`, `displayfunc`).
+- **Twenty on-disc structures convert** from the console's layout into
+  host-sized ones, and a converted model draws through upstream's own display
+  path — a recorded 29-call GX frame, asserted.
+- **The SDK callback boundary is decided and implemented**: one thread, an
+  exact 675675-tick NTSC field, alarms at their own instant, interrupt masking
+  that really defers a handler. Determinism is asserted.
+- **120 test cases** (61 on the port's own HSD, 59 on upstream's) run in CI on
+  GCC with sanitizers, Clang, and MSVC.
+- The `bootstrap.cpp` menu flow is still hand-written, and
+  `src/melee_port/hsd/` still holds 16 files the runtime uses.
+
+**The game does not run.** What runs is its engine, on x86-64, fed by archives
+in the disc's own layout, verified.
+
+## What actually stands between here and a running game
+
+The single most useful measurement of this session, for planning purposes:
+
+```
+tools/upstream_native_spike.py extern/melee --only melee --aurora-headers
+→ 850 / 908 game translation units parse against Aurora's headers (93.6%)
+```
+
+And the 58 that do not are not a wall — they are a named list:
+
+| Cause | Count | What it means |
+|---|---|---|
+| GameCube struct layout asserted | 32 | Not a blocker but the **inventory**: these are the `ASSERT_SIZE` lines that fail because a pointer is 8 bytes here. Each names a structure that needs converting. |
+| `PAD_*` button constants absent | 12 | Aurora's `pad.h` omits them. Header work, hours not weeks. |
+| Declaration stricter than MWCC accepts | 7 | Prototype mismatches upstream's compiler tolerated. |
+| `GXSetTevClampMode`, `PADSetSamplingRate`, `CARDFormatAsync` | 6 | Three of the named absent SDK symbols. |
+| `OSContext::fpscr`, one arity | 2 | Aurora's `OSContext` lacks a field the debugger path reads. |
+
+**Only one of the 58 is in `melee/ft`** — the fighters, 441 files and 145,000
+lines, the largest subsystem in the game. The fighter code is essentially
+ready to compile. The failures cluster in `melee/gm` (27, the game manager and
+scene table) and `melee/gr` (9, stages).
+
+So the remaining work is not "compile the game". It is three things:
+
+1. **Convert the rest of the on-disc structures.** Twenty done, roughly
+   fifteen to go for the engine, plus whatever the 32 asserting units name.
+2. **Fill the SDK gaps.** Small and named everywhere except audio.
+3. **Make it run** — boot order, the frame loop, and the scene flow.
+
+### The one genuinely unmeasured gap: audio
+
+Aurora implements `AR`, `CARD`, `DVD`, `GX`, `MTX`, `OS`, `PAD`, `SI` and
+`VI`. It implements **no `AX`, `AI`, `DSP` or `THP`** — headers only. Melee's
+audio path is HAL's own `axdriver.c` and `synth.c` (both decompiled, both in
+`sysdolphin`) calling **60 distinct `AX` symbols**: voice acquisition, ADPCM
+streaming, mixing, and the reverb, chorus and delay effects.
+
+`extern/musyx` is vendored, but **Melee does not use MusyX** — zero references
+in the whole decompilation. It belongs to the other port sharing this
+repository. Phase 6 therefore means implementing a GameCube DSP voice mixer,
+or bridging those 60 symbols onto a host audio library. That is the part of
+this plan with no measurement behind its estimate.
 
 ---
 
@@ -478,7 +536,11 @@ existing `disc_mount` layer over Aurora DVD.
 **Done when** `gm_801A4510` runs the boot sequence, the title screen and main
 menu respond to a controller, and no menu logic remains in this repository.
 
-**Size.** Large. ~107,000 lines, but mechanical: it compiles today.
+**Size.** Large but measured. ~107,000 lines, and 121 of its 144 translation
+units already parse — the 23 that do not are 27 `melee/gm` failures (mostly
+struct-layout assertions and the `PAD_*` constants) and 5 in `melee/lb`.
+`melee/gm` is the densest cluster of remaining work in the whole game, which
+is unsurprising: it is the scene table, and the scene table names everything.
 
 ## Phase 5 — A match
 
@@ -491,22 +553,44 @@ stage → `melee/it` minimal (items off).
 **Done when** a two-player match starts from the character select, plays to a
 result screen, and replays identically from the same inputs.
 
-**Size.** Large. `ft/kinds/ftCommon` is the shared engine; a single fighter
-on top of it is comparatively small.
+**Size.** Large in line count, small in unknowns. `melee/ft` is 441 files and
+145,000 lines, and **440 of them already parse** — one failure in the whole
+subsystem. `ft/kinds/ftCommon` is the shared engine; a single fighter on top
+of it is comparatively small. The risk here is not compilation, it is that
+fighter behavior is where a wrong conversion first becomes visible as a
+gameplay difference rather than a crash.
 
 ## Phase 6 — Sound
 
 **Objective.** Music and effects.
 
-musyx is already a submodule. Melee's path runs `melee/sfx` over AX and the
-ARAM queue; the 36 unresolved audio symbols from the link measurement belong
-here.
+**The estimate here was wrong and is now corrected.** This plan said "musyx is
+already a submodule", implying the engine was in hand. It is not: `extern/musyx`
+is vendored for the *other* port in this repository, and **Melee references
+MusyX nowhere** — zero hits across 1034 files.
+
+Melee's audio is HAL's own. `sysdolphin/baselib/axdriver.c` and `synth.c` are
+decompiled and present, and they call **60 distinct `AX` symbols**: voice
+acquisition and release, ADPCM streaming with loop points, per-voice mixing
+and volume envelopes, sample-rate conversion, and the four effect chains
+(reverb standard, reverb high, chorus, delay). Aurora implements none of
+them — `ai.h`, `dsp.h` and `thp.h` are headers with nothing behind them.
+
+So this phase is one of:
+
+- implement the GameCube DSP voice mixer those 60 symbols describe, against a
+  host audio callback; or
+- bridge them onto an existing implementation (Dolphin's DSP-HLE is the
+  reference, and its licence and shape would have to be examined first).
 
 **Done when** menu music, stage music, and hit effects play in sync with the
 simulation.
 
-**Size.** Medium to large, and the least de-risked part of this plan — no
-measurement in this session touched it.
+**Size.** Medium to large, and **the only part of this plan with no
+measurement behind its estimate**. It should be spiked before it is
+scheduled: implement `AXAcquireVoice`, `AXSetVoiceAddr`, `AXSetVoiceAdpcm`,
+`AXSetVoiceVe` and `AXSetVoiceMix` well enough to play one sound effect from
+one Melee bank, and let that tell the real number.
 
 ## Phase 7 — Everything else
 
@@ -521,7 +605,9 @@ measurement in this session touched it.
 **Done when** a mode checklist is complete and each entry has been played.
 
 **Size.** The bulk of the remaining line count, but the most parallelizable:
-fighters and stages are largely independent once the engine is up.
+fighters and stages are largely independent once the engine is up, and both
+already compile — `melee/ft` fails on one unit of 441, `melee/gr` on nine of
+77, `melee/it` on none of 183.
 
 ## Phase 8 — Fidelity and shipping
 
@@ -573,14 +659,26 @@ ever. A legally obtained disc image is a runtime input.
    than during fighter bring-up. The recorder makes this cheap and it already
    works; what it also showed is that some of what the console drew was never
    determinate in the first place — see *Golden frames* above.
-2. **Audio.** Nothing has been measured. Mitigation: spike musyx against one
-   Melee sound bank before committing phase 6's shape.
+2. **Audio, and it is now the top unmeasured risk.** Aurora implements no
+   `AX`, `AI`, `DSP` or `THP` — headers only — and Melee's decompiled audio
+   driver calls 60 distinct `AX` symbols. The mitigation this plan used to
+   name was wrong: `extern/musyx` belongs to the other port in this
+   repository and Melee references it nowhere. Mitigation: spike five `AX`
+   voice calls against one Melee sound bank and let that produce the estimate,
+   before phase 6 is scheduled at all.
 3. ~~**The threading model.**~~ **Retired.** The risk assumed a choice that
    does not exist: the game creates no threads, so there is no scheduling for
    the rest of the port to inherit. What replaced it is a callback scheduler
    whose determinism is asserted. The residual risk moved to phase 6: audio
    *does* run on a thread inside the SDK, and that thread is Aurora's.
-4. **The 33 structure-layout assertions.** They exist to verify the match
+4. **A conversion that is wrong but not fatal.** Twenty structures convert and
+   each is tested, but a field read from the wrong offset produces a model
+   that draws — slightly wrong. The fighters are where this first becomes
+   visible, and by then it is 145,000 lines away from the cause. Mitigation:
+   every converter asserts against upstream's own consumer, not against a
+   document, and the 32 units whose layout assertions fail are a list of
+   exactly which structures still have no twin.
+5. **The 33 structure-layout assertions.** They exist to verify the match
    against the original binary and are meaningless on a 64-bit host.
    Mitigation: disable for host builds, and record that the `*32b` twins are
    what now guarantees the layout. They are also the wrong inventory to work
@@ -588,31 +686,41 @@ ever. A legally obtained disc image is a runtime input.
    that matter. One assertion is not merely noise, though: `psdisp` asserts a
    pointer-holding structure is eight bytes, and that is a real `*32b` twin
    waiting to be written rather than an assertion to switch off.
-5. **Upstream drift.** The submodule is pinned; updating it is a deliberate
+6. **Upstream drift.** The submodule is pinned; updating it is a deliberate
    act with the suite as the gate.
+7. **Scope.** 481,000 lines is a multi-year effort at a community's pace. The
+   mitigation is the sequencing itself: every phase above ends somewhere
+   playable or measurable, so the work has value before it is finished.
 
 ## The next five actions
 
-Phase 0 is done. These are what follow.
+Phase 0 is done, most of phase 1 is done, and phase 2's mechanism is built.
+These are what follow, in order.
 
-Phase 0 is done, and so is action 5 of the previous list: the recording GX
-surface exists, and with it the whole scene-object layer.
+1. **Bridge `VI`'s retrace callbacks onto the scheduler** (phase 1). The other
+   half of the callback boundary. A frame loop cannot run without it, and
+   everything from phase 3 on is a frame loop.
+2. **Add the named SDK gaps** (phase 1) — the `PAD_*` button constants (12
+   units), `GXSetTevClampMode` (4), `PADSetSamplingRate`, `CARDFormatAsync`,
+   `GXInitFogAdjTable`, `GXNtsc480IntDf`, `GXWaitDrawDone`, and
+   `OSContext::fpscr`. Every one is named, none is deep, and together they
+   clear 26 of the 58 failing game units.
+3. **Convert `HSD_Spline` and the particle list** (phase 2) — the last two
+   things `unconverted()` reports, after which a whole archive converts.
+4. **Load `MnMaAll.dat` from the disc and draw it with upstream's renderer**
+   (phase 3). Everything it needs now exists: the archive reader, the
+   converters, the scene graph, the camera, and the recorder to compare
+   against. This is the step that proves the approach end to end, and it is
+   the first frame a person could look at.
+5. **Spike five `AX` voice calls against one Melee sound bank** (phase 6, out
+   of order deliberately). Audio is the only estimate in this plan with no
+   measurement behind it, and it is cheaper to learn that now than after
+   phase 5.
 
-1. Bridge `VI`'s retrace callbacks onto the scheduler (phase 1) — the
-   remaining half of the callback boundary, and what a frame loop needs before
-   it can run at all.
-2. Convert `HSD_Spline` and the particle `HSD_SList` — the last two things
-   `unconverted()` reports, and the last of a joint's three union forms.
-3. Key the HSD ID table on archive offsets rather than descriptor addresses
-   (phase 2) — nine of the fourteen remaining pointer casts, and the port's
-   `id` unit already uses 32-bit keys, so this is a decision more than a
-   discovery.
-4. Add the five absent SDK symbols (phase 1). Four of them now have a name
-   attached to a unit: `GXInitFogAdjTable` is what keeps `fog` out, and
-   `VIPadFrameBufferWidth`, `GXWaitDrawDone` and `GXNtsc480IntDf` are what
-   keep `video` out. `GXNtsc480IntDf` is a render-mode constant and has to be
-   sourced, not invented.
-5. Drive a loaded archive through upstream's `jobj` and record the frame.
-   Everything for it is now in place — the scene graph, the camera, the
-   recorder — and it is the first point at which the game's own code draws
-   something this project can compare against the console.
+### The critical path
+
+Phases 3 → 4 → 5 are strictly sequential: nothing draws until the SDK
+boundary is closed, nothing navigates until it draws, and no match runs until
+the scene flow does. Phases 6 and 7 are not on that path — audio and the
+remaining fighters, stages and items can proceed in parallel once phase 5
+lands, and they are where a second pair of hands would help most.
