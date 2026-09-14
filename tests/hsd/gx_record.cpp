@@ -31,6 +31,12 @@
 // puts them in the right order.
 #include <dolphin/gx.h>
 
+// reset() pairs the trace with HSD's model of the pipeline.  See the note
+// there for why a recording GX knows about HSD at all.
+extern "C" {
+#include <sysdolphin/baselib/state.h>
+}
+
 // include/melee/port/dolphin_compat.h adapts upstream's three-argument
 // GXSetArray onto Aurora's five with a function-like macro.  This file *is*
 // Aurora's five-argument function, so it needs the name back -- a macro
@@ -176,6 +182,18 @@ namespace meleeboard::test::gx {
 
 void reset()
 {
+    // Invalidating first, clearing second, and both on purpose.
+    //
+    // The trace is the GPU; HSD's state cache in state.c is its model of the
+    // GPU.  Clearing one without the other leaves HSD believing the pipeline
+    // still holds values the fresh trace never set, and the next frame
+    // silently leaves those calls out -- so what a golden trace contains
+    // would depend on which case ran before it.  HSD_GXInit pairs the two the
+    // same way at boot: GXInit, then HSD_StateInvalidate(-1).
+    //
+    // The invalidation emits one GXClearVtxDesc of its own, which is why it
+    // happens before the clear rather than after.
+    HSD_StateInvalidate(-1);
     g_trace.clear();
     g_pointers.clear();
 }
@@ -851,6 +869,23 @@ extern "C" void GXInitFogAdjTable(GXFogAdjTable* table, u16 width,
     for (u16& coefficient : table->r) {
         coefficient = 0x0100;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline bring-up.
+//
+// main() calls GXInit once, with the block HSD_AllocateFifo carved out of the
+// arena, and hands the result to HSD_GXSetFifoObj.  On the console it resets
+// every piece of pipeline state and returns the fifo object the SDK keeps for
+// the CPU-side write pointer.  The recorder has no pipeline to reset, so it
+// records the call and answers a fifo object of its own; upstream never reads
+// a field of it, only passes the pointer back.
+extern "C" GXFifoObj* GXInit(void* base, u32 size)
+{
+    record("GXInit", base, size);
+    static GXFifoObj fifo;
+    std::memset(&fifo, 0, sizeof(fifo));
+    return &fifo;
 }
 
 // ---------------------------------------------------------------------------

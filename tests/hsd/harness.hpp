@@ -13,6 +13,13 @@ namespace meleeboard::test {
 using CaseBody = void (*)();
 
 int register_case(const char* suite, const char* name, CaseBody body);
+
+// Installs a function to run once before the first case.  A target whose
+// cases need a world standing up registers it here: the conformance target
+// boots HSD, because upstream's HSD_GetHeap answers -1 until HSD_OSInit has
+// carved a heap out of the arena -- exactly as it does on the console before
+// main() reaches HSD_InitComponent.
+void set_environment_setup(void (*setup)());
 void record_failure(const char* file, int line, const std::string& message);
 [[noreturn]] void abort_case();
 int run_all(int argc, char** argv);

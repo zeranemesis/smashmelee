@@ -51,18 +51,22 @@ reimplemented. The rest of the sequencing still holds.
 ## Where the port is today
 
 - A native shell mounts a GALE01 v1.02 image and exposes its filesystem.
-- **35 of the 76 `sysdolphin/baselib` units** — upstream's own HSD, unmodified
+- **38 of the 76 `sysdolphin/baselib` units** — upstream's own HSD, unmodified
   — compile, link and answer behavioral assertions: the object and class
-  model, animation, the archive loader, and the entire render half (`jobj`,
+  model, animation, the archive loader, the entire render half (`jobj`,
   `dobj`, `mobj`, `pobj`, `tobj`, `cobj`, `lobj`, `tev`, `texp`, `state`,
-  `shadow`, `robj`, `wobj`, `displayfunc`).
+  `shadow`, `robj`, `wobj`, `displayfunc`), the video layer, and the boot.
+- **Melee's own bring-up runs.** `HSD_AllocateXFB`, `HSD_AllocateFifo` and
+  `HSD_InitComponent` — `gmmain.c`'s own lines — carve two framebuffers, a
+  graphics fifo and two heaps out of a 24 MiB arena and emit the console's
+  26-call opening GX sequence, held as a golden trace.
 - **Twenty on-disc structures convert** from the console's layout into
   host-sized ones, and a converted model draws through upstream's own display
-  path — a recorded 29-call GX frame, asserted.
+  path — a recorded GX frame, asserted.
 - **The SDK callback boundary is decided and implemented**: one thread, an
   exact 675675-tick NTSC field, alarms at their own instant, interrupt masking
   that really defers a handler. Determinism is asserted.
-- **120 test cases** (61 on the port's own HSD, 59 on upstream's) run in CI on
+- **137 test cases** (61 on the port's own HSD, 76 on upstream's) run in CI on
   GCC with sanitizers, Clang, and MSVC.
 - The `bootstrap.cpp` menu flow is still hand-written, and
   `src/melee_port/hsd/` still holds 16 files the runtime uses.
@@ -297,10 +301,71 @@ there is a test for it. Upstream's own `HSD_VIInit` now runs — it configures
 the mode, registers its callbacks and its draw-done callback, sets up two
 external framebuffers — and a field passes with its callbacks firing.
 
+### The OS arena and heap · **built, and the boot runs**
+
+`initialize.c` is in, which closes this phase. It is the unit that turns an
+arena into HSD's heaps, and it is eight SDK calls long: `OSGetArenaLo`/`Hi` to
+find what the boot code left, `OSInitAlloc` to carve a heap-descriptor array
+out of the bottom of it, `OSCreateHeap` twice — once for audio, once for
+everything else — and `OSSetArenaLo` to hand back what is left.
+
+The measurement that mattered here reversed the plan's assumption. **Aurora
+already has a complete SDK allocator**: `extern/aurora/lib/dolphin/os/
+OSAlloc.cpp` is 560 lines of first-fit heap with 32-byte cells, coalescing
+free lists and a real `OSCheckHeap`, and `aurora::os` is already on `dol`'s
+link line. So the shipping build's heap was never missing — what was missing
+was a heap the *conformance target* could link, and that target deliberately
+links no Aurora library, because `aurora::core` drags in SDL, fmt, abseil and
+sqlite.
+
+`src/melee_port/upstream/os_arena.cpp` is that heap, written to the same
+observable contract so upstream cannot tell which one it got. Two things it
+does that Aurora's does not, both because the port needs them:
+
+- the whole arena sits in **one** host block whose size is a power of two and
+  whose base is aligned to that size, so the low word of every address in it
+  is distinct. That is the `DescriptorArena` construction, and putting the
+  arena itself on that footing generalises the truncated-pointer ID fix from
+  joints to every object HSD allocates;
+- an `ArenaScope` saves the whole allocator state, installs a private arena,
+  and restores it — so a case can carve an arena up without freeing memory
+  HSD's object pools still point into.
+
+What came out of it is bigger than the allocator. `tests/hsd/upstream_boot.cpp`
+now runs **Melee's own bring-up**, unchanged, once before the first case:
+
+```
+HSD_SetInitParameter(HSD_INIT_XFB_MAX_NUM, 2);
+HSD_SetInitParameter(HSD_INIT_RENDER_MODE_OBJ, &GXNtsc480IntDf);
+HSD_SetInitParameter(HSD_INIT_FIFO_SIZE, 0x40000);
+HSD_SetInitParameter(HSD_INIT_HEAP_MAX_NUM, 4);
+HSD_AllocateXFB(2, &GXNtsc480IntDf);
+HSD_GXSetFifoObj(GXInit(HSD_AllocateFifo(0x40000), 0x40000));
+HSD_InitComponent();
+```
+
+Those are `gmmain.c`'s lines 148–154. They produce, out of 24 MiB of arena:
+two framebuffers 614 400 bytes apart, a 256 KiB graphics fifo, a 512 KiB audio
+heap at handle 0, a 22 MiB main heap at handle 1, `arenaLo` equal to `arenaHi`
+because the arena is spent — and a 26-call GX transcript of the console's
+opening frame, which the suite now holds as a golden trace. `HSD_MemAlloc`
+comes back with a 32-aligned block inside that arena. Before this, HSD's own
+`HSD_GetHeap` answered −1 and every allocation asserted, exactly as it does on
+hardware before `main()` reaches `HSD_InitComponent`.
+
+One thing the boot found on its way in, which is worth recording because it
+was a latent bug in the *tests* rather than in the port. `HSD_GXInit` ends
+with `HSD_StateInvalidate(-1)`, and before the boot existed nothing ever
+invalidated `state.c`'s cache — so its statics sat at zero, four of the
+material fields happened to want zero, and the golden traces silently omitted
+`GXSetAlphaUpdate`, `GXSetDstAlpha`, `GXSetDither` and `GXSetCullMode`. Worse,
+the second drawing case's trace was shorter than the first's *because the
+first had run*: the cache persisted across cases, so the goldens depended on
+test order. `gx::reset()` now invalidates before it clears, which is the
+pairing `HSD_GXInit` itself uses, and both traces are the console's.
+
 ### What remains for this phase
 
-- the `OS` arena and heap, which `initialize.c` reaches for — the last thing
-  between the conformance target and upstream's own `HSD_InitComponent`;
 - the `DC`/`IC` cache operations, which are no-ops on a coherent host;
 - ~~`GXSetArray`'s two extra arguments.~~ **Done.** The adapter is in the
   prelude, and `src/melee_port/upstream/gx_array_registry.cpp` answers both
@@ -336,7 +401,7 @@ The suite already pins `objalloc`, `class`/`object`, `list`, `id`, `fobj`
 (twelve stream shapes) and `aobj` (seven playback modes) against upstream's
 own behavior, so most of this phase has its acceptance test written already.
 
-**Thirty-five units have moved**, which is the whole of HSD's scene graph and
+**Thirty-eight units have moved**, which is the whole of HSD's scene graph and
 most of what stands under it: the object and class model (`objalloc`, `class`,
 `object`, `list`, `id`, `hash`, `memory`), animation (`fobj`, `aobj`,
 `bytecode`, `spline`), the archive loader, the math pools (`mtx`, `quatlib`)
@@ -344,8 +409,9 @@ and utilities (`util`, `random`), the entire render half (`jobj`, `dobj`,
 `mobj`, `pobj`, `tobj`, `cobj`, `lobj`, `tev`, `texp`, `texpdag`, `state`,
 `shadow`, `robj`, `wobj`, `displayfunc`), and the particle system that owns
 the skinning helper the scene graph builds envelope matrices with (`particle`,
-`generator`, `psappsrt`, `perf`). Aurora's matrix and vector implementations
-link in alongside.
+`generator`, `psappsrt`, `perf`), the video layer and the boot (`fog`,
+`video`, `initialize`). Aurora's matrix and vector implementations link in
+alongside.
 
 Running them side by side found a real defect in the port's `ref_DEC`, which
 released a reference one call early whenever more than one was held, and
@@ -354,18 +420,22 @@ upstream's reads a hash nothing populates and always answers NULL. `fobj`
 carries the twelve-stream table, now asserted against both interpreters, so
 the encoding bug that started this cannot come back.
 
-**Four units remain outside, each for a named reason.** `fog` needs
-`GXInitFogAdjTable`; `video` needs `VIPadFrameBufferWidth`, `GXWaitDrawDone`
-and the `GXNtsc480IntDf` render mode — none of the four are in Aurora, and
-they are four of the five absent SDK symbols phase 1 lists. `psdisp` asserts
-that a structure holding a pointer is eight bytes, which it is not on a
-64-bit host; that one is a `*32b` twin, not a missing symbol. `debug` is
-written against the Metrowerks libc's `FILE` internals, so a host port
-replaces it rather than compiles it. `initialize` is not a gap but a phase:
-it reaches for the OS arena and heap, which is phase 1's work, and until it
-arrives the suite supplies the two things it owns — `HSD_GetCurrentRenderPass`
-and, from `video`, `HSD_VIData` — from `tests/hsd/upstream_host.c`. Both are
-written to collide deliberately: the day those units join, the linker says so.
+`fog`, `video` and `initialize` have since joined them — the absent SDK
+symbols they needed are supplied, and `initialize` brought the arena with it
+— so **thirty-eight units are in**, and `HSD_InitComponent` runs.
+
+**Two units remain outside, each for a named reason.** `psdisp` asserts that a
+structure holding a pointer is eight bytes, which it is not on a 64-bit host;
+that one is a `*32b` twin, not a missing symbol. `debug` is written against
+the Metrowerks libc's `FILE` internals, so a host port replaces it rather
+than compiles it — the suite supplies `HSD_LogInit` as an empty function,
+which is the right behavior for a test binary.
+
+The host shims those three units displaced had all been written to collide
+deliberately, and every one of them announced itself on arrival: `HSD_GetHeap`
+and `HSD_GetCurrentRenderPass` from `initialize`, `HSD_VIData` from `video`,
+and the whole hand-written allocator from `os_arena`. The pattern is worth
+keeping — a stub that cannot silently outlive the real thing.
 
 ### Why there are no wire structs
 
@@ -758,27 +828,25 @@ ever. A legally obtained disc image is a runtime input.
    mitigation is the sequencing itself: every phase above ends somewhere
    playable or measurable, so the work has value before it is finished.
 
-## The next five actions
+## The next four actions
 
-Phase 0 is done, most of phase 1 is done, and phase 2's mechanism is built.
-These are what follow, in order.
+Phase 0 is done, **phase 1 is done** — upstream's own `HSD_InitComponent`
+runs, and the port boots the console's opening frame — and phase 2's
+mechanism is built. These are what follow, in order.
 
-1. **Bring `initialize.c` over** (phase 1) — the `OS` arena and heap surface it
-   reaches for is the last thing between the conformance target and upstream's
-   own `HSD_InitComponent`, which is what phase 3 has to call.
-2. **Convert `HSD_Spline` and the particle list** (phase 2) — the last two
+1. **Convert `HSD_Spline` and the particle list** (phase 2) — the last two
    things `unconverted()` reports, after which a whole archive converts.
-3. **Re-run the game-wide syntax check** and confirm the 26 units the new
-   declarations should have cleared actually cleared.
-4. **Load `MnMaAll.dat` from the disc and draw it with upstream's renderer**
+2. **Load `MnMaAll.dat` from the disc and draw it with upstream's renderer**
    (phase 3). Everything it needs now exists: the archive reader, the
-   converters, the scene graph, the camera, and the recorder to compare
-   against. This is the step that proves the approach end to end, and it is
-   the first frame a person could look at.
-5. **Spike five `AX` voice calls against one Melee sound bank** (phase 6, out
+   converters, the scene graph, the camera, a booted HSD, and the recorder to
+   compare against. This is the step that proves the approach end to end, and
+   it is the first frame a person could look at.
+3. **Spike five `AX` voice calls against one Melee sound bank** (phase 6, out
    of order deliberately). Audio is the only estimate in this plan with no
    measurement behind it, and it is cheaper to learn that now than after
    phase 5.
+4. **Attack the 32 struct-layout assertions** (phase 2) — the shopping list of
+   places where a 64-bit pointer makes upstream's own `sizeof` check fail.
 
 ### The critical path
 

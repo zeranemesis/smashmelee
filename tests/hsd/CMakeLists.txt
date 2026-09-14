@@ -101,14 +101,15 @@ add_test(NAME melee_hsd_tests COMMAND melee_hsd_tests)
 # exercised continuously rather than in one step at the end.  The two binaries
 # cannot be one: both implementations define HSD_ObjAlloc.
 #
-# Thirty-five units have moved, which is the whole of HSD's scene graph and
+# Thirty-eight units have moved, which is the whole of HSD's scene graph and
 # most of what stands under it: the object and class model (objalloc, class,
 # object, list, id, hash, memory), animation (fobj, aobj, bytecode, spline),
 # the archive loader, the math pools (mtx, quatlib) and utilities (util,
 # random), the entire render half (jobj, dobj, mobj, pobj, tobj, cobj, lobj,
 # tev, texp, texpdag, state, shadow, robj, wobj, displayfunc), and the
 # particle system that shares the skinning helper with it (particle,
-# generator, psappsrt, perf).
+# generator, psappsrt, perf), and the video layer and boot (fog, video,
+# initialize).
 #
 # The render half arrives because gx_record.cpp gives it a GX to talk to: 84
 # entry points that append a line to a trace instead of drawing.  That is not
@@ -116,13 +117,15 @@ add_test(NAME melee_hsd_tests COMMAND melee_hsd_tests)
 # needs -- a deterministic transcript of a frame, to compare a real one
 # against.
 #
-# Four units remain outside, and each for a named reason: fog needs
-# GXInitFogAdjTable and video needs VIPadFrameBufferWidth, GXWaitDrawDone and
-# the GXNtsc480IntDf render mode, none of which Aurora has; psdisp asserts
-# that a structure holding a pointer is eight bytes, which it is not here; and
-# debug is written against the Metrowerks libc's FILE internals, so a host
-# port replaces it rather than compiles it.  initialize is not a gap but a
-# phase: it reaches for the OS arena and heap, which is phase 1.
+# Two units remain outside, and each for a named reason: psdisp asserts that a
+# structure holding a pointer is eight bytes, which it is not here; and debug
+# is written against the Metrowerks libc's FILE internals, so a host port
+# replaces it rather than compiles it.
+#
+# initialize.c is in, which is what closes phase 1: it is the unit that turns
+# an arena into HSD's heaps, and os_arena.cpp gives it a real one to carve.
+# Running HSD_InitComponent end to end is the first time the port executes
+# upstream's own boot sequence rather than a test's approximation of it.
 #
 # Aurora's matrix and vector implementations are linked in alongside: mtx.c
 # calls the SDK math, and Aurora macro-aliases the unprefixed MTX* spellings
@@ -172,6 +175,7 @@ else ()
             sysdolphin/baselib/displayfunc
             sysdolphin/baselib/fog
             sysdolphin/baselib/video
+            sysdolphin/baselib/initialize
             sysdolphin/baselib/bytecode
             # The particle system, which owns the skinning helper jobj and
             # dobj build envelope matrices with.
@@ -187,6 +191,8 @@ else ()
             ${CMAKE_CURRENT_LIST_DIR}/gx_texture_stub.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_convert.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_scheduler.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/upstream_boot.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_arena.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_scene.cpp
             # The archive reader and the converter that builds host-sized
             # structures from it.  Neither defines an HSD symbol, so unlike
@@ -195,6 +201,7 @@ else ()
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/archive_convert.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/descriptor_arena.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/os_scheduler.cpp
+            ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/os_arena.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/vi_bridge.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/gx_array_registry.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_core.cpp
@@ -216,6 +223,10 @@ else ()
     if (MSVC)
         target_compile_options(melee_hsd_upstream_tests PRIVATE
                 $<$<COMPILE_LANGUAGE:CXX>:/W4>
+                # C4324: the allocator's cell header is over-aligned on
+                # purpose -- the payload sits one alignment unit past it, and
+                # both have to be 32-byte aligned.
+                $<$<COMPILE_LANGUAGE:CXX>:/wd4324>
                 # HSD_ASSERT hands __FILE__ to a char* parameter, and
                 # hsdInitClassInfo takes its names the same way.  C accepts
                 # that; C++ needs the older string-literal conversion, which

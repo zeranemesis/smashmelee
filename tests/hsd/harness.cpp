@@ -49,8 +49,22 @@ void record_failure(const char* file, int line, const std::string& message)
 
 void abort_case() { throw CaseAbort{}; }
 
+using SetupHook = void (*)();
+
+SetupHook& environment_setup()
+{
+    static SetupHook setup = nullptr;
+    return setup;
+}
+
+void set_environment_setup(SetupHook setup) { environment_setup() = setup; }
+
 int run_all(int argc, char** argv)
 {
+    if (environment_setup() != nullptr) {
+        environment_setup()();
+    }
+
     const char* filter = argc > 1 ? argv[1] : nullptr;
 
     std::vector<Case>& cases = registry();

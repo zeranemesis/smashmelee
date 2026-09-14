@@ -164,8 +164,7 @@ order.
       across runs and hosts.  That unblocked the whole render half —
       `jobj`, `dobj`, `mobj`, `pobj`, `tobj`, `cobj`, `lobj`, `tev`, `texp`,
       `texpdag`, `state`, `shadow`, `robj`, `wobj`, `displayfunc` — and the
-      particle units that own the skinning helper, for **thirty-five upstream
-      units** in all.  Setting a camera current now records a viewport, a
+      particle units that own the skinning helper.  Setting a camera current now records a viewport, a
       scissor and the console's own perspective matrix, and the suite asserts
       the shape of that frame as text and its computed terms with a tolerance;
 - [x] write the first on-disc converter,
@@ -262,6 +261,37 @@ order.
       takes, the weights cancel and the result is the zero quaternion.  It is
       asserted as such: a reimplementation that corrected it would diverge
       from the disc;
+- [x] close the SDK boundary's last gap, the `OS` arena and heap, and boot
+      the game with it.  The measurement reversed the plan's assumption:
+      Aurora already ships a complete SDK allocator
+      (`extern/aurora/lib/dolphin/os/OSAlloc.cpp`, already on the runtime's
+      link line), so what was missing was a heap the *conformance target*
+      could link — that target takes no Aurora library, because
+      `aurora::core` drags in SDL, fmt, abseil and sqlite.
+      `src/melee_port/upstream/os_arena.cpp` is written to the same observable
+      contract — 32-byte cells, first fit, address-ordered coalescing free
+      list, an `OSCheckHeap` that reports real free space because
+      `objalloc.c` branches on it — over one host block sized to a power of
+      two and aligned to itself, so the low word of *every* HSD allocation is
+      distinct, not just a joint descriptor's.  With it in place
+      `tests/hsd/upstream_boot.cpp` runs `gmmain.c`'s own bring-up unchanged:
+      four `HSD_SetInitParameter` calls, `HSD_AllocateXFB(2, &GXNtsc480IntDf)`,
+      `HSD_GXSetFifoObj(GXInit(HSD_AllocateFifo(0x40000), 0x40000))`,
+      `HSD_InitComponent()`.  Out of 24 MiB of arena come two framebuffers
+      614 400 bytes apart, a 256 KiB graphics fifo, a 512 KiB audio heap, a
+      22 MiB main heap, a spent arena, and a 26-call GX transcript of the
+      console's opening frame — held as a golden trace.  **Thirty-eight
+      upstream units** now compile and run, `fog`, `video` and `initialize`
+      among them;
+- [x] fix the golden traces the boot exposed as order-dependent.
+      `HSD_GXInit` ends with `HSD_StateInvalidate(-1)`; before a boot existed
+      nothing invalidated `state.c`'s cache, its statics sat at zero, four
+      material fields happened to want zero, and the recorded frames silently
+      omitted `GXSetAlphaUpdate`, `GXSetDstAlpha`, `GXSetDither` and
+      `GXSetCullMode` — with the second drawing case's trace shorter than the
+      first's *because the first had run*.  `gx::reset()` now invalidates
+      before it clears, the pairing `HSD_GXInit` itself uses, and both traces
+      are the console's;
 - [x] carry the SDK spellings Aurora's Dolphin headers omit in
       `include/melee/port/dolphin_compat.h`, and shadow upstream's
       `Runtime/platform.h` from `cmake/MeleeUpstream.cmake` so its `ssize_t`

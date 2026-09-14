@@ -16,54 +16,13 @@
 #include <melee/port/dolphin_compat.h>
 #include <sysdolphin/baselib/video.h>
 
-// OSAlloc.h declares this as the heap OSAlloc()/OSFree() use.
-//
-// These four used to be declared here with hand-written signatures, which
-// nothing checked until the prelude started pulling <dolphin/os.h> in.  They
-// now match Aurora's declarations exactly -- OSHeapHandle rather than int, u32
-// rather than unsigned long, const char* rather than char* -- which is what a
-// build against Aurora's real OS would have required anyway.
-volatile int __OSCurrHeap = 0;
-
-// HSD pools hand their objects to GX, which wants 32-byte alignment.
-#define MELEE_HOST_ALIGNMENT 32
-
-void* OSAllocFromHeap(OSHeapHandle heap, u32 size)
-{
-    const size_t bytes = size != 0 ? (size_t) size : MELEE_HOST_ALIGNMENT;
-    (void) heap;
-#ifdef _MSC_VER
-    return _aligned_malloc(bytes, MELEE_HOST_ALIGNMENT);
-#else
-    {
-        void* memory = NULL;
-        if (posix_memalign(&memory, MELEE_HOST_ALIGNMENT, bytes) != 0) {
-            return NULL;
-        }
-        return memory;
-    }
-#endif
-}
-
-void OSFreeToHeap(OSHeapHandle heap, void* pointer)
-{
-    (void) heap;
-#ifdef _MSC_VER
-    _aligned_free(pointer);
-#else
-    free(pointer);
-#endif
-}
-
-s32 OSCheckHeap(OSHeapHandle heap)
-{
-    (void) heap;
-    return 0;
-}
-
-// HSD_GetHeap lives in initialize.c, which is not part of this target: it
-// would pull in VI, GX and the framebuffers.
-int HSD_GetHeap(void) { return 0; }
+// The OS arena, the heap allocator and __OSCurrHeap used to be hand-written
+// here: a posix_memalign per allocation, a free per release, and an
+// OSCheckHeap that always answered zero.  They now come from
+// src/melee_port/upstream/os_arena.cpp, which is a real first-fit heap over a
+// real arena -- so initialize.c can carve the audio and main heaps out of it
+// the way HSD_OSInit means to, and objalloc.c's trimming path sees an honest
+// answer when it asks how much room is left.
 
 void OSReport(const char* format, ...)
 {
@@ -118,11 +77,15 @@ unsigned long melee_pad_sampling_rate(void) { return g_pad_sampling_rate_msec; }
 
 
 
-// The two pieces of HSD that live in units still at the boot boundary.
+// The two symbols initialize.c reaches for that live in units this target
+// does not compile.
 //
-// HSD_GetCurrentRenderPass is defined in initialize.c, which cannot come over
-// until the OS arena and heap do -- it is phase 1 of docs/PLAN.md, not phase
-// 2.  cobj.c reads it to choose which camera setup to run, so answering
-// HSD_RP_SCREEN here is what puts the camera on the ordinary path.
-HSD_RenderPass HSD_GetCurrentRenderPass(void) { return HSD_RP_SCREEN; }
+// HSD_LogInit is debug.c's, and debug.c is written against the Metrowerks
+// libc's FILE internals -- a host port replaces it rather than compiles it.
+// Initializing no log is the correct behavior for a test binary anyway.
+void HSD_LogInit(void) {}
 
+// The audio heap handle is synth.c's, and synth.c is phase 6.  HSD_OSInit
+// assigns it the heap it carves for audio, so the storage has to exist even
+// though nothing reads it yet; -1 is what synth.static.h initializes it to.
+OSHeapHandle HSD_Synth_804D6018 = -1;

@@ -831,12 +831,14 @@ MELEE_TEST(UpstreamConvert, DrawsAConvertedModelThroughTheGamesOwnDisplayPath)
                          "GXPixModeSync GXSetTevOrder GXSetTevColorOp "
                          "GXSetTevColorIn GXSetTevAlphaOp GXSetTevAlphaIn "
                          "GXSetTevSwapMode GXSetTevKColorSel "
-                         "GXSetTevKAlphaSel GXSetColorUpdate GXSetBlendMode "
+                         "GXSetTevKAlphaSel GXSetColorUpdate "
+                         "GXSetAlphaUpdate GXSetDstAlpha GXSetBlendMode "
                          "GXSetZMode GXSetZCompLoc GXSetAlphaCompare "
-                         "GXSetNumTevStages GXSetNumTexGens GXSetNumChans "
-                         "GXSetChanMatColor GXSetChanCtrl GXSetCurrentMtx "
-                         "GXLoadPosMtxImm GXSetArray GXClearVtxDesc "
-                         "GXSetVtxDesc GXSetVtxAttrFmt GXCallDisplayList"));
+                         "GXSetDither GXSetNumTevStages GXSetNumTexGens "
+                         "GXSetNumChans GXSetChanMatColor GXSetChanCtrl "
+                         "GXSetCullMode GXSetCurrentMtx GXLoadPosMtxImm "
+                         "GXSetArray GXClearVtxDesc GXSetVtxDesc "
+                         "GXSetVtxAttrFmt GXCallDisplayList"));
 
     HSD_JObjRemoveAll(jobj);
 }
@@ -1077,10 +1079,13 @@ MELEE_TEST(UpstreamConvert, DrawsATexturedModelThroughTheGamesOwnDisplayPath)
                          "GXSetTevOrder GXSetTevColorOp GXSetTevColorIn "
                          "GXSetTevAlphaOp GXSetTevAlphaIn GXSetTevSwapMode "
                          "GXSetTevKColorSel GXSetTevKAlphaSel "
-                         "GXSetNumTevStages GXSetNumTexGens GXSetNumChans "
-                         "GXSetCurrentMtx GXLoadPosMtxImm GXSetArray "
-                         "GXClearVtxDesc GXSetVtxDesc GXSetVtxAttrFmt "
-                         "GXCallDisplayList"));
+                         "GXSetColorUpdate GXSetAlphaUpdate GXSetDstAlpha "
+                         "GXSetBlendMode GXSetZMode GXSetZCompLoc "
+                         "GXSetAlphaCompare GXSetDither GXSetNumTevStages "
+                         "GXSetNumTexGens GXSetNumChans GXSetChanMatColor "
+                         "GXSetChanCtrl GXSetCullMode GXSetCurrentMtx "
+                         "GXLoadPosMtxImm GXSetArray GXClearVtxDesc "
+                         "GXSetVtxDesc GXSetVtxAttrFmt GXCallDisplayList"));
 
     // The texture matrix is loaded before anything else, and the texture
     // coordinate is generated through it.
