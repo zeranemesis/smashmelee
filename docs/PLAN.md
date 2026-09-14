@@ -60,7 +60,7 @@ reimplemented. The rest of the sequencing still holds.
   `HSD_InitComponent` — `gmmain.c`'s own lines — carve two framebuffers, a
   graphics fifo and two heaps out of a 24 MiB arena and emit the console's
   26-call opening GX sequence, held as a golden trace.
-- **Twenty on-disc structures convert** from the console's layout into
+- **Twenty-two on-disc structures convert** from the console's layout into
   host-sized ones, and a converted model draws through upstream's own display
   path — a recorded GX frame, asserted.
 - **The SDK callback boundary is decided and implemented**: one thread, an
@@ -110,7 +110,7 @@ cluster in `melee/gm` (19, the game manager and scene table) and `melee/gr`
 
 So the remaining work is not "compile the game". It is three things:
 
-1. **Convert the rest of the on-disc structures.** Twenty done, roughly
+1. **Convert the rest of the on-disc structures.** Twenty-two done, roughly
    fifteen to go for the engine, plus whatever the 32 asserting units name.
 2. **Fill the SDK gaps.** Done for everything named except audio — and none of
    it had to be invented: every spelling came from upstream's own bundled SDK
@@ -471,12 +471,14 @@ aligned blocks could collide with each other, so running out is a refusal with
 a reason. `HSD_Joint` is the only structure that needs this; it is the only
 one whose address upstream ever truncates.
 
-**Twenty structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
+**Twenty-two structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
 `HSD_MObjDesc`, `HSD_Material`, `HSD_PEDesc`, `HSD_PObjDesc`,
 `HSD_VtxDescList`, `HSD_ShapeSetDesc`, `HSD_EnvelopeDesc`, `HSD_TObjDesc`,
 `HSD_ImageDesc`, `HSD_TlutDesc`, `HSD_TexLODDesc`, `HSD_TObjTevDesc`,
-`HSD_RObjDesc`, `HSD_IKHintDesc`, `HSD_ExpDesc`, `HSD_ByteCodeExpDesc` and
-`HSD_RvalueList` — a whole textured, skinned, constrained model. A material converts entire: `renderdesc` is
+`HSD_RObjDesc`, `HSD_IKHintDesc`, `HSD_ExpDesc`, `HSD_ByteCodeExpDesc`,
+`HSD_RvalueList`, `HSD_Spline` and the particle `HSD_SList` — a whole
+textured, skinned, constrained model, and both of the non-geometry things a
+joint's union can hold. A material converts entire: `renderdesc` is
 the only field left null, and deliberately, because it appears exactly once in
 upstream's tree — its own declaration — so nothing reads it.
 
@@ -559,11 +561,23 @@ one would be a jump into nothing. The converter leaves it NULL *deliberately*,
 because upstream already handles that: `expLoadDesc` substitutes `dummy_func`.
 The safe answer turned out to be upstream's own answer.
 
-What `unconverted()` still reports, and therefore what remains before a real
-archive converts whole: `HSD_Spline` or the particle `HSD_SList` where a
-joint's union holds one of those instead of a display object, and an
-`HSD_RObjDesc` whose type is none of the five `HSD_RObjLoadDesc` handles —
-which upstream panics on, so reporting it rather than guessing is the point.
+**A whole archive now converts.** What `unconverted()` still reports is not a
+missing converter but a union whose tag has a value upstream's own switch does
+not handle: an `HSD_RObjDesc` whose type is none of the five
+`HSD_RObjLoadDesc` knows — which upstream panics on — and a primitive whose
+two `POBJ_*` flag bits are the fourth combination. Reporting those rather
+than guessing is the point.
+
+Two things the last two converters turned up, both of which a wire struct
+would have got wrong. `HSD_Spline`'s `numcv` is not the number of control
+points: it divides *parameter space*, and how many points that implies is the
+curve's business — `numcv` for a linear spline, `3·numcv − 2` for a Bézier,
+`numcv + 2` for a B-spline or a cardinal, each read off `splGetSplinePoint`'s
+own indexing in both its branches. And the particle list's `void* data` is not
+a pointer at all: `HSD_JObjLoadJoint` does `*(u32*) &slist->data |=
+0x80000000` and `HSD_JObjDisp` reads a six-bit bank and a 24-bit offset out of
+it, so it is a packed integer the relocation table does not name — read with
+`data_word`, because asking for a pointer correctly refuses it.
 
 ### What the pointer work actually is
 
@@ -807,8 +821,8 @@ ever. A legally obtained disc image is a runtime input.
    the rest of the port to inherit. What replaced it is a callback scheduler
    whose determinism is asserted. The residual risk moved to phase 6: audio
    *does* run on a thread inside the SDK, and that thread is Aurora's.
-4. **A conversion that is wrong but not fatal.** Twenty structures convert and
-   each is tested, but a field read from the wrong offset produces a model
+4. **A conversion that is wrong but not fatal.** Twenty-two structures convert
+   and each is tested, but a field read from the wrong offset produces a model
    that draws — slightly wrong. The fighters are where this first becomes
    visible, and by then it is 145,000 lines away from the cause. Mitigation:
    every converter asserts against upstream's own consumer, not against a
@@ -828,24 +842,22 @@ ever. A legally obtained disc image is a runtime input.
    mitigation is the sequencing itself: every phase above ends somewhere
    playable or measurable, so the work has value before it is finished.
 
-## The next four actions
+## The next three actions
 
 Phase 0 is done, **phase 1 is done** — upstream's own `HSD_InitComponent`
 runs, and the port boots the console's opening frame — and phase 2's
 mechanism is built. These are what follow, in order.
 
-1. **Convert `HSD_Spline` and the particle list** (phase 2) — the last two
-   things `unconverted()` reports, after which a whole archive converts.
-2. **Load `MnMaAll.dat` from the disc and draw it with upstream's renderer**
+1. **Load `MnMaAll.dat` from the disc and draw it with upstream's renderer**
    (phase 3). Everything it needs now exists: the archive reader, the
    converters, the scene graph, the camera, a booted HSD, and the recorder to
    compare against. This is the step that proves the approach end to end, and
    it is the first frame a person could look at.
-3. **Spike five `AX` voice calls against one Melee sound bank** (phase 6, out
+2. **Spike five `AX` voice calls against one Melee sound bank** (phase 6, out
    of order deliberately). Audio is the only estimate in this plan with no
    measurement behind it, and it is cheaper to learn that now than after
    phase 5.
-4. **Attack the 32 struct-layout assertions** (phase 2) — the shopping list of
+3. **Attack the 32 struct-layout assertions** (phase 2) — the shopping list of
    places where a 64-bit pointer makes upstream's own `sizeof` check fail.
 
 ### The critical path

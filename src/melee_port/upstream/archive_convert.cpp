@@ -42,21 +42,65 @@ constexpr uint32_t kJointMatrix = 0x38;
 constexpr uint32_t kJointRObjDesc = 0x3C;
 constexpr uint32_t kJointSize = 0x40;
 
+// HSD_Spline, 0x18 bytes on the console.  sysdolphin/baselib/spline.h.
+constexpr uint32_t kSplineType = 0x00;
+constexpr uint32_t kSplineControlCount = 0x02;
+constexpr uint32_t kSplineTension = 0x04;
+constexpr uint32_t kSplineControlPoints = 0x08;
+constexpr uint32_t kSplineTotalLength = 0x0C;
+constexpr uint32_t kSplineSegmentLengths = 0x10;
+constexpr uint32_t kSplineSegmentPolynomials = 0x14;
+constexpr uint32_t kSplineSize = 0x18;
+
+// HSD_SList, 8 bytes: a next pointer and one word beside it.
+constexpr uint32_t kSListNext = 0x00;
+constexpr uint32_t kSListData = 0x04;
+constexpr uint32_t kSListSize = 0x08;
+
+// Sanity limits.  A spline with more control points than this, or a particle
+// list longer than this, is a misread structure rather than content: Melee's
+// splines run to a few dozen points and its particle lists to a handful of
+// entries.  Without a limit a corrupt `next` field is an endless walk.
+constexpr uint32_t kMaxControlPoints = 4096;
+constexpr uint32_t kMaxParticleNodes = 4096;
+
+// How many control points splGetSplinePoint actually reads -- which is not
+// numcv.
+//
+// numcv divides *parameter space*: the runtime computes u * (numcv - 1) and
+// takes the integer part as a segment index.  How many points a segment needs
+// is the curve's business, and each line below is read straight off
+// splGetSplinePoint's own indexing, in both the u < 1 branch and the u == 1
+// one:
+//
+//   type 0, linear    cv[idx], cv[idx+1], idx <= numcv-2     -> numcv
+//   type 1, Bezier    cv[idx*3 .. idx*3+3]                   -> 3*numcv - 2
+//   type 2, B-spline  cv[idx-1 .. idx+2]                     -> numcv + 2
+//   type 3, cardinal  cv[idx .. idx+3]                       -> numcv + 2
+//
+// Converting only numcv of them would leave upstream reading past the end of
+// the host array on a curve the console draws correctly -- the kind of bug
+// that shows up as one wrong point at the end of a camera path.
+uint32_t control_point_count(u8 type, uint32_t numcv)
+{
+    if (numcv < 2) {
+        return numcv;
+    }
+    switch (type) {
+    case 1:
+        return 3 * numcv - 2;
+    case 2:
+    case 3:
+        return numcv + 2;
+    default:
+        return numcv;
+    }
+}
+
 // What the union at +0x10 holds is decided by two of the joint's flags.
 bool union_is_display_object(uint32_t flags)
 {
     return (flags & (JOBJ_PTCL | JOBJ_SPLINE)) == 0;
-}
-
-const char* union_kind(uint32_t flags)
-{
-    if ((flags & JOBJ_PTCL) != 0) {
-        return "HSD_SList (particle)";
-    }
-    if ((flags & JOBJ_SPLINE) != 0) {
-        return "HSD_Spline";
-    }
-    return "HSD_DObjDesc";
 }
 
 // HSD_DObjDesc, 0x10 bytes on the console.
@@ -839,6 +883,181 @@ HSD_PObjDesc* ArchiveConverter::convert_primitive(uint32_t offset)
     return &host;
 }
 
+HSD_Spline* ArchiveConverter::convert_spline(uint32_t offset)
+{
+    const auto seen = splines_by_offset_.find(offset);
+    if (seen != splines_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kSplineSize)) {
+        error_ = "spline at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    splines_.emplace_back();
+    HSD_Spline& host = splines_.back();
+    std::memset(&host, 0, sizeof host);
+    splines_by_offset_.emplace(offset, &host);
+
+    host.type = *archive_.data_byte(offset + kSplineType);
+    const s16 numcv = static_cast<s16>(read_u16(offset + kSplineControlCount));
+    if (numcv < 0 || static_cast<uint32_t>(numcv) > kMaxControlPoints) {
+        error_ = "spline at offset " + std::to_string(offset) +
+                 " claims " + std::to_string(numcv) +
+                 " control points, which is not a curve";
+        return nullptr;
+    }
+    host.numcv = numcv;
+    host.tension = *archive_.data_float(offset + kSplineTension);
+    host.totalLength = *archive_.data_float(offset + kSplineTotalLength);
+
+    // The three arrays below are precomputed on disc.  Nothing in the
+    // decompilation fills segLength or segPoly -- spline.c only ever reads
+    // them -- so the exporter wrote them, and converting them is the whole
+    // job.
+    const auto control = archive_.data_pointer(offset + kSplineControlPoints);
+    if (control.has_value() && *control != Archive::kNullOffset) {
+        const uint32_t count =
+            control_point_count(host.type, static_cast<uint32_t>(numcv));
+        if (!archive_.contains_data_range(*control, count * 12u)) {
+            error_ = "spline at offset " + std::to_string(offset) +
+                     " has control points running off the data section";
+            return nullptr;
+        }
+        control_points_.emplace_back(count);
+        std::vector<Vec3>& points = control_points_.back();
+        for (uint32_t index = 0; index < count; ++index) {
+            if (!read_vector(*control + index * 12u, points[index])) {
+                error_ = "spline at offset " + std::to_string(offset) +
+                         " has a control point outside the data section";
+                return nullptr;
+            }
+        }
+        host.cv = points.data();
+    }
+
+    // One entry per control parameter: splArcLengthGetParameter walks
+    // segLength[idx + 1] with idx running to numcv - 2, so the last index it
+    // reads is numcv - 1.
+    const auto lengths = archive_.data_pointer(offset + kSplineSegmentLengths);
+    if (lengths.has_value() && *lengths != Archive::kNullOffset) {
+        const uint32_t count = static_cast<uint32_t>(numcv);
+        if (!archive_.contains_data_range(*lengths, count * 4u)) {
+            error_ = "spline at offset " + std::to_string(offset) +
+                     " has segment lengths running off the data section";
+            return nullptr;
+        }
+        segment_lengths_.emplace_back(count);
+        std::vector<f32>& values = segment_lengths_.back();
+        for (uint32_t index = 0; index < count; ++index) {
+            values[index] = *archive_.data_float(*lengths + index * 4u);
+        }
+        host.segLength = values.data();
+    }
+
+    // Five coefficients per segment, and there are numcv - 1 segments.  Only
+    // the curved types have them; a linear spline leaves the field NULL and
+    // splArcLengthGetParameter's case 0 never looks.
+    const auto polynomials =
+        archive_.data_pointer(offset + kSplineSegmentPolynomials);
+    if (polynomials.has_value() && *polynomials != Archive::kNullOffset) {
+        const uint32_t rows =
+            numcv > 1 ? static_cast<uint32_t>(numcv) - 1u : 0u;
+        if (!archive_.contains_data_range(*polynomials, rows * 5u * 4u)) {
+            error_ = "spline at offset " + std::to_string(offset) +
+                     " has segment polynomials running off the data section";
+            return nullptr;
+        }
+        segment_polynomials_.emplace_back(rows);
+        std::vector<std::array<f32, 5>>& coefficients =
+            segment_polynomials_.back();
+        for (uint32_t row = 0; row < rows; ++row) {
+            for (uint32_t column = 0; column < 5; ++column) {
+                coefficients[row][column] =
+                    *archive_.data_float(*polynomials + (row * 5u + column) * 4u);
+            }
+        }
+        // std::array<f32, 5> is five floats and nothing else, so an array of
+        // them is exactly the f32[][5] upstream indexes.
+        host.segPoly = reinterpret_cast<f32(*)[5]>(coefficients.data());
+    }
+
+    return &host;
+}
+
+// A joint's particle list, whose payload is not a pointer.
+//
+// HSD_SList is a next pointer beside a `void* data`, and everywhere else in
+// HSD that field really is a pointer.  Here it is not: HSD_JObjLoadJoint does
+// `*(u32*) &slist->data |= 0x80000000`, and HSD_JObjDisp reads a six-bit bank
+// out of the bottom of it and a 24-bit offset above that.  The word is a
+// packed integer that the archive's relocation table therefore does not name,
+// which is why it is read with data_word and not data_pointer -- asking for a
+// pointer would correctly refuse it.
+//
+// Storing it in the low half of a host pointer is what makes upstream's
+// `*(u32*) &slist->data` reach the right bits, and that holds on a
+// little-endian host.  The port has no big-endian target; if it ever gets
+// one, this is the line that breaks, loudly, because the flag would land in
+// the unused high word.
+HSD_SList* ArchiveConverter::convert_particle_list(uint32_t offset)
+{
+    HSD_SList* head = nullptr;
+    HSD_SList* tail = nullptr;
+    uint32_t current = offset;
+
+    for (uint32_t walked = 0; current != Archive::kNullOffset; ++walked) {
+        if (walked >= kMaxParticleNodes) {
+            error_ = "particle list at offset " + std::to_string(offset) +
+                     " does not end";
+            return nullptr;
+        }
+
+        // A node already converted -- the lists of two joints can share a
+        // tail -- is linked to rather than copied, so identity is preserved
+        // the way it is for every other structure here.
+        const auto seen = particle_lists_by_offset_.find(current);
+        if (seen != particle_lists_by_offset_.end()) {
+            if (tail != nullptr) {
+                tail->next = seen->second;
+                return head;
+            }
+            return seen->second;
+        }
+
+        if (!archive_.contains_data_range(current, kSListSize)) {
+            error_ = "particle list node at offset " + std::to_string(current) +
+                     " lies outside the archive's data section";
+            return nullptr;
+        }
+
+        particle_nodes_.emplace_back();
+        HSD_SList& node = particle_nodes_.back();
+        node.next = nullptr;
+        node.data = reinterpret_cast<void*>(static_cast<std::uintptr_t>(
+            *archive_.data_word(current + kSListData)));
+        particle_lists_by_offset_.emplace(current, &node);
+
+        if (tail != nullptr) {
+            tail->next = &node;
+        } else {
+            head = &node;
+        }
+        tail = &node;
+
+        const auto next = archive_.data_pointer(current + kSListNext);
+        if (!next.has_value()) {
+            error_ = "particle list node at offset " + std::to_string(current) +
+                     " has a next field that is not a relocated pointer";
+            return nullptr;
+        }
+        current = *next;
+    }
+
+    return head;
+}
+
 HSD_TObjDesc* ArchiveConverter::texture(uint32_t offset)
 {
     error_.clear();
@@ -1298,20 +1517,31 @@ HSD_Joint* ArchiveConverter::convert_joint_graph(uint32_t offset)
             }
         }
 
-        // A joint's union is a display object, a spline, or a particle list,
-        // and which one the flags decide.  The display object is built; the
-        // other two are recorded rather than refused, because the rest of the
-        // graph is correct and a caller can see exactly what is missing.
+        // A joint's union is a display object, a spline, or a particle
+        // list, and the flags decide which.  All three are built.
         const auto union_field = archive_.data_pointer(current + kJointUnion);
         if (union_field.has_value() && *union_field != Archive::kNullOffset) {
+            // The order is jobj.c's own: HSD_JObjLoadJoint tests spline
+            // before particle, so a joint that somehow carries both flags
+            // resolves the way the console resolves it.
             if (union_is_display_object(*flags)) {
                 HSD_DObjDesc* display = convert_display_object(*union_field);
                 if (display == nullptr) {
                     return nullptr;
                 }
                 host.u.dobjdesc = display;
+            } else if ((*flags & JOBJ_SPLINE) != 0) {
+                HSD_Spline* spline = convert_spline(*union_field);
+                if (spline == nullptr) {
+                    return nullptr;
+                }
+                host.u.spline = spline;
             } else {
-                note_unconverted(current, *union_field, union_kind(*flags));
+                HSD_SList* particles = convert_particle_list(*union_field);
+                if (particles == nullptr) {
+                    return nullptr;
+                }
+                host.u.ptcl = particles;
             }
         }
         const auto robjdesc = archive_.data_pointer(current + kJointRObjDesc);

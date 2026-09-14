@@ -33,6 +33,7 @@ extern "C" {
 #include <sysdolphin/baselib/objalloc.h>
 #include <sysdolphin/baselib/robj.h>
 #include <sysdolphin/baselib/shadow.h>
+#include <sysdolphin/baselib/spline.h>
 #include <sysdolphin/baselib/tev.h>
 }
 
@@ -180,15 +181,21 @@ MELEE_TEST(UpstreamConvert, SeparatesARelocatedZeroFromANullPointer)
     CHECK(without->child == nullptr);
 }
 
-MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
+MELEE_TEST(UpstreamConvert, ConvertsAJointsParticleList)
 {
-    // A joint whose union is a particle list.  Particles are a subsystem of
-    // their own, so the field is left null and the reference is reported.
+    // A joint whose union is a particle list: two HSD_SList nodes, whose data
+    // word is a packed bank-and-offset integer rather than a pointer.  Bank
+    // is the bottom six bits; the offset sits above it, shifted by six.
     DatBuilder builder;
-    const uint32_t particles = builder.allocate(0x08);
+    const uint32_t second = builder.allocate(0x08);
+    const uint32_t first = builder.allocate(0x08);
+    builder.pointer(first + 0x00, second);
+    builder.u32(first + 0x04, (7u << JOBJ_PTCL_OFFSET_SHIFT) | 5u);
+    builder.u32(second + 0x04, (9u << JOBJ_PTCL_OFFSET_SHIFT) | 3u);
+
     const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
     builder.u32(joint + 0x04, JOBJ_PTCL);
-    builder.pointer(joint + 0x10, particles);
+    builder.pointer(joint + 0x10, first);
 
     const Archive archive = parse(builder);
     REQUIRE(archive.is_valid());
@@ -196,13 +203,38 @@ MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
     ArchiveConverter converter(archive);
     HSD_Joint* host = converter.joint(joint);
     REQUIRE(host != nullptr);
-    CHECK(host->u.ptcl == nullptr);
+    REQUIRE(host->u.ptcl != nullptr);
+    CHECK_EQ(converter.particle_node_count(), std::size_t(2));
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
 
-    REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
-    CHECK_EQ(converter.unconverted()[0].holder, joint);
-    CHECK_EQ(converter.unconverted()[0].target, particles);
-    CHECK_EQ(std::string(converter.unconverted()[0].kind),
-             std::string("HSD_SList (particle)"));
+    // The chain, and the packed word read back the way HSD_JObjDisp reads it.
+    HSD_SList* node = host->u.ptcl;
+    CHECK_EQ((uint32_t) (uintptr_t) node->data & JOBJ_PTCL_BANK_MASK, 5u);
+    CHECK_EQ(((uint32_t) (uintptr_t) node->data >> JOBJ_PTCL_OFFSET_SHIFT) &
+                 JOBJ_PTCL_OFFSET_MASK,
+             7u);
+    REQUIRE(node->next != nullptr);
+    node = node->next;
+    CHECK_EQ((uint32_t) (uintptr_t) node->data & JOBJ_PTCL_BANK_MASK, 3u);
+    CHECK_EQ(((uint32_t) (uintptr_t) node->data >> JOBJ_PTCL_OFFSET_SHIFT) &
+                 JOBJ_PTCL_OFFSET_MASK,
+             9u);
+    CHECK(node->next == nullptr);
+
+    // Upstream's own loader walks the list and sets the top bit of every
+    // node's data word in place -- `*(u32*) &slist->data |= 0x80000000`.  The
+    // packed value has to survive that, which is what pins the layout choice
+    // of storing it in the low half of a host pointer.
+    HSD_JObj* jobj = HSD_JObjLoadJoint(host);
+    REQUIRE(jobj != nullptr);
+    CHECK(jobj->u.ptcl == host->u.ptcl);
+    for (HSD_SList* walk = jobj->u.ptcl; walk != nullptr; walk = walk->next) {
+        CHECK(((uint32_t) (uintptr_t) walk->data & 0x80000000u) != 0);
+    }
+    CHECK_EQ((uint32_t) (uintptr_t) jobj->u.ptcl->data,
+             0x80000000u | (7u << JOBJ_PTCL_OFFSET_SHIFT) | 5u);
+
+    HSD_JObjRemoveAll(jobj);
 }
 
 MELEE_TEST(UpstreamConvert, ConvertsTheFourReferenceObjectTypesByFlag)
@@ -509,13 +541,58 @@ MELEE_TEST(UpstreamConvert, LeavesRenderDescAloneWithoutReportingIt)
     CHECK_EQ(converter.unconverted().size(), std::size_t(0));
 }
 
-MELEE_TEST(UpstreamConvert, StillRecordsASplineJointAsUnconverted)
+// Lays down a spline of `type` with `numcv` control parameters, its control
+// points on a straight line one unit apart, a normalized cumulative length
+// table, and -- for the curved types -- a polynomial row per segment.
+uint32_t add_spline(DatBuilder& builder, uint8_t type, int16_t numcv,
+                    bool with_polynomials)
 {
-    // A joint whose union is a spline rather than a display object.  Which of
-    // the three the union holds is decided by the joint's flags, and only the
-    // display object is built.
-    DatBuilder builder;
+    const uint32_t points = numcv < 2 ? (uint32_t) numcv
+                            : type == 1 ? 3u * (uint32_t) numcv - 2u
+                            : type >= 2 ? (uint32_t) numcv + 2u
+                                        : (uint32_t) numcv;
+    const uint32_t cv = builder.allocate(points * 12u);
+    for (uint32_t index = 0; index < points; ++index) {
+        builder.f32(cv + index * 12u + 0, (float) index);
+        builder.f32(cv + index * 12u + 4, 0.0F);
+        builder.f32(cv + index * 12u + 8, 0.0F);
+    }
+
+    const uint32_t lengths = builder.allocate((uint32_t) numcv * 4u);
+    for (int16_t index = 0; index < numcv; ++index) {
+        builder.f32(lengths + (uint32_t) index * 4u,
+                    (float) index / (float) (numcv - 1));
+    }
+
+    const uint32_t rows = numcv > 1 ? (uint32_t) numcv - 1u : 0u;
+    uint32_t polynomials = 0;
+    if (with_polynomials) {
+        polynomials = builder.allocate(rows * 5u * 4u);
+        for (uint32_t row = 0; row < rows; ++row) {
+            for (uint32_t column = 0; column < 5; ++column) {
+                builder.f32(polynomials + (row * 5u + column) * 4u,
+                            (float) (row * 10u + column));
+            }
+        }
+    }
+
     const uint32_t spline = builder.allocate(0x18);
+    builder.u8(spline + 0x00, type);
+    builder.s16(spline + 0x02, numcv);
+    builder.f32(spline + 0x04, 0.5F);
+    builder.pointer(spline + 0x08, cv);
+    builder.f32(spline + 0x0C, 12.5F);
+    builder.pointer(spline + 0x10, lengths);
+    if (with_polynomials) {
+        builder.pointer(spline + 0x14, polynomials);
+    }
+    return spline;
+}
+
+MELEE_TEST(UpstreamConvert, ConvertsAJointsSpline)
+{
+    DatBuilder builder;
+    const uint32_t spline = add_spline(builder, 3, 4, true);
     const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
     builder.u32(joint + 0x04, JOBJ_SPLINE);
     builder.pointer(joint + 0x10, spline);
@@ -526,12 +603,148 @@ MELEE_TEST(UpstreamConvert, StillRecordsASplineJointAsUnconverted)
     ArchiveConverter converter(archive);
     HSD_Joint* host = converter.joint(joint);
     REQUIRE(host != nullptr);
-    CHECK(host->u.spline == nullptr);
+    REQUIRE(host->u.spline != nullptr);
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
+    CHECK_EQ(converter.spline_count(), std::size_t(1));
 
-    REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
-    CHECK_EQ(converter.unconverted()[0].target, spline);
-    CHECK_EQ(std::string(converter.unconverted()[0].kind),
-             std::string("HSD_Spline"));
+    HSD_Spline* curve = host->u.spline;
+    CHECK_EQ((int) curve->type, 3);
+    CHECK_EQ((int) curve->numcv, 4);
+    CHECK_NEAR(curve->tension, 0.5, kTolerance);
+    CHECK_NEAR(curve->totalLength, 12.5, kTolerance);
+
+    // A cardinal spline reads cv[idx .. idx+3] with idx up to numcv-2, and
+    // cv[numcv] at the far end: numcv + 2 points, not numcv.  All six are
+    // here, in order.
+    REQUIRE(curve->cv != nullptr);
+    for (int index = 0; index < 6; ++index) {
+        CHECK_NEAR(curve->cv[index].x, (double) index, kTolerance);
+    }
+
+    // The cumulative length table runs 0 to 1 over numcv entries.
+    REQUIRE(curve->segLength != nullptr);
+    CHECK_NEAR(curve->segLength[0], 0.0, kTolerance);
+    CHECK_NEAR(curve->segLength[3], 1.0, kTolerance);
+
+    // Five coefficients per segment, and numcv - 1 segments.
+    REQUIRE(curve->segPoly != nullptr);
+    CHECK_NEAR(curve->segPoly[0][0], 0.0, kTolerance);
+    CHECK_NEAR(curve->segPoly[0][4], 4.0, kTolerance);
+    CHECK_NEAR(curve->segPoly[2][3], 23.0, kTolerance);
+
+    // And the joint loads: upstream copies the descriptor's spline pointer
+    // straight across, so the host curve is what the scene graph animates on.
+    HSD_JObj* jobj = HSD_JObjLoadJoint(host);
+    REQUIRE(jobj != nullptr);
+    CHECK(jobj->u.spline == curve);
+    HSD_JObjRemoveAll(jobj);
+}
+
+MELEE_TEST(UpstreamConvert, EvaluatesAConvertedSplineWithUpstreamsOwnMath)
+{
+    // The end-to-end check: on-disc bytes in, upstream's own spline evaluator
+    // out.  A linear spline whose four control points sit at x = 0, 1, 2, 3.
+    DatBuilder builder;
+    const uint32_t curve = add_spline(builder, 0, 4, false);
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    builder.u32(joint + 0x04, JOBJ_SPLINE);
+    builder.pointer(joint + 0x10, curve);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(joint);
+    REQUIRE(host != nullptr);
+    REQUIRE(host->u.spline != nullptr);
+
+    // u is normalized over the whole curve: 0.5 lands halfway along the
+    // middle segment, at x = 1.5.
+    Vec3 point{};
+    splGetSplinePoint(&point, host->u.spline, 0.5F);
+    CHECK_NEAR(point.x, 1.5, kTolerance);
+
+    // The ends are the first and last control points exactly, which is the
+    // u == 1 branch of splGetSplinePoint reading cv[numcv - 1].
+    splGetSplinePoint(&point, host->u.spline, 0.0F);
+    CHECK_NEAR(point.x, 0.0, kTolerance);
+    splGetSplinePoint(&point, host->u.spline, 1.0F);
+    CHECK_NEAR(point.x, 3.0, kTolerance);
+
+    // And by arc length, which goes through the cumulative table instead: the
+    // table is uniform here, so half the length is half the parameter.
+    splArcLengthPoint(&point, host->u.spline, 0.5F);
+    CHECK_NEAR(point.x, 1.5, kTolerance);
+}
+
+MELEE_TEST(UpstreamConvert, SizesControlPointsByTheCurveType)
+{
+    // Four control parameters, four curve types, four different on-disc
+    // control-point counts.  A converter that assumed numcv would leave
+    // upstream reading past the end of the array for three of the four.
+    struct Case {
+        uint8_t type;
+        int last_index;   // the highest index splGetSplinePoint reads
+    };
+    const Case cases[] = {
+        { 0, 3 }, // linear:   numcv         = 4 points
+        { 1, 9 }, // Bezier:   3*numcv - 2   = 10
+        { 2, 5 }, // B-spline: numcv + 2     = 6
+        { 3, 5 }, // cardinal: numcv + 2     = 6
+    };
+
+    for (const Case& one : cases) {
+        DatBuilder builder;
+        const uint32_t curve = add_spline(builder, one.type, 4, one.type != 0);
+        const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+        builder.u32(joint + 0x04, JOBJ_SPLINE);
+        builder.pointer(joint + 0x10, curve);
+
+        const Archive archive = parse(builder);
+        REQUIRE(archive.is_valid());
+
+        ArchiveConverter converter(archive);
+        HSD_Joint* host = converter.joint(joint);
+        REQUIRE(host != nullptr);
+        REQUIRE(host->u.spline != nullptr);
+        REQUIRE(host->u.spline->cv != nullptr);
+        // add_spline writes each point's x as its index, so the last point
+        // reading back as its own index is the count being right.
+        CHECK_NEAR(host->u.spline->cv[one.last_index].x,
+                   (double) one.last_index, kTolerance);
+    }
+}
+
+MELEE_TEST(UpstreamConvert, RefusesASplineWhosePointsRunOffTheSection)
+{
+    // numcv says four cardinal control parameters, which needs six points.
+    // Put three at the very end of the data section, so the other three would
+    // have to come from past it.
+    //
+    // The console would read them: the whole file is in memory, so the fourth
+    // point lands in the relocation table and the curve draws with garbage.
+    // A host cannot read past its own buffer, and converting only what fits
+    // would hand upstream an array it indexes past -- so this refuses, and
+    // says which field was short.
+    DatBuilder builder;
+    const uint32_t spline = builder.allocate(0x18);
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    const uint32_t cv = builder.allocate(3 * 12);
+
+    builder.u8(spline + 0x00, 3);
+    builder.s16(spline + 0x02, 4);
+    builder.pointer(spline + 0x08, cv);
+    builder.u32(joint + 0x04, JOBJ_SPLINE);
+    builder.pointer(joint + 0x10, spline);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+    REQUIRE_EQ(cv + 3 * 12, archive.data_size());
+
+    ArchiveConverter converter(archive);
+    CHECK(converter.joint(joint) == nullptr);
+    CHECK(converter.error().find("control points running off") !=
+          std::string::npos);
 }
 
 MELEE_TEST(UpstreamConvert, RefusesAJointOutsideTheDataSection)

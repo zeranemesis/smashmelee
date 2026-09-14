@@ -261,6 +261,22 @@ order.
       takes, the weights cancel and the result is the zero quaternion.  It is
       asserted as such: a reimplementation that corrected it would diverge
       from the disc;
+- [x] convert the last two structure kinds a joint's union can hold,
+      `HSD_Spline` and the particle `HSD_SList`, so a whole archive converts.
+      Both had a trap a wire struct would have walked into.  `numcv` is not
+      the control-point count -- it divides parameter space, and the count it
+      implies is `numcv` for a linear spline, `3*numcv - 2` for a Bezier and
+      `numcv + 2` for a B-spline or cardinal one, each read off
+      `splGetSplinePoint`'s own indexing in both of its branches; converting
+      only `numcv` of them would leave upstream reading past the host array on
+      a curve the console draws.  And the particle list's `void* data` is not
+      a pointer: `HSD_JObjLoadJoint` does `*(u32*) &slist->data |= 0x80000000`
+      and `HSD_JObjDisp` reads a six-bit bank and a 24-bit offset out of it,
+      so it is a packed integer the relocation table does not name -- read
+      with `data_word`, because asking `Archive` for a pointer correctly
+      refuses an unrelocated non-zero word.  A converted linear spline now
+      evaluates through upstream's own `splGetSplinePoint` and
+      `splArcLengthPoint` to the points it was built from;
 - [x] close the SDK boundary's last gap, the `OS` arena and heap, and boot
       the game with it.  The measurement reversed the plan's assumption:
       Aurora already ships a complete SDK allocator

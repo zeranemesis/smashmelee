@@ -12,6 +12,7 @@
 // phase 2 of docs/PLAN.md calls the *32b converters, and it does not take the
 // shape the plan expected -- see the note on wire structs in the source.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -27,18 +28,27 @@
 extern "C" {
 #include <sysdolphin/baselib/dobj.h>
 #include <sysdolphin/baselib/jobj.h>
+#include <sysdolphin/baselib/list.h>
 #include <sysdolphin/baselib/mobj.h>
 #include <sysdolphin/baselib/pobj.h>
 #include <sysdolphin/baselib/robj.h>
+#include <sysdolphin/baselib/spline.h>
 #include <sysdolphin/baselib/tobj.h>
 }
 
 namespace meleeboard::hsd {
 
-// A pointer field the converter followed to something it cannot build yet.
-// The graph it produces is complete except for these, and a renderer must
-// not be run while any remain: a silently null display object draws nothing
-// and looks exactly like a broken renderer.
+// A pointer field the converter followed to something it could not build.
+//
+// Every structure kind Melee's archives hold now converts, so a well-formed
+// archive produces none of these.  What remains are the two unions whose tag
+// has a value upstream's own switch does not handle -- an robj whose type
+// nibble is unknown, and a pobj whose two flag bits are the fourth
+// combination -- and reporting them is the point: the console would panic or
+// read the wrong arm, and guessing here would silently draw the wrong thing.
+//
+// A renderer must not be run while any remain: a null display object draws
+// nothing and looks exactly like a broken renderer.
 struct UnconvertedReference {
     // Data-section offset of the structure that holds the field.
     uint32_t holder = 0;
@@ -95,6 +105,8 @@ public:
     }
 
     std::size_t joint_count() const { return joints_by_offset_.size(); }
+    std::size_t spline_count() const { return splines_by_offset_.size(); }
+    std::size_t particle_node_count() const { return particle_nodes_.size(); }
 
     // Where the joint descriptors live.  Their addresses become ID-table
     // keys truncated to 32 bits, so they need storage whose low words are
@@ -141,6 +153,8 @@ private:
     u8** convert_index_table(uint32_t offset, uint32_t count,
                              const char* what);
     HSD_RObjDesc* convert_reference_object(uint32_t offset);
+    HSD_Spline* convert_spline(uint32_t offset);
+    HSD_SList* convert_particle_list(uint32_t offset);
     HSD_RvalueList* convert_rvalue_list(uint32_t offset);
     const void* raw_data(uint32_t offset, uint32_t* extent);
 
@@ -180,6 +194,13 @@ private:
     std::deque<std::vector<HSD_EnvelopeDesc*>> envelope_tables_;
     std::deque<std::vector<u8*>> index_tables_;
     std::deque<HSD_RObjDesc> reference_objects_;
+    std::deque<HSD_Spline> splines_;
+    std::deque<std::vector<Vec3>> control_points_;
+    std::deque<std::vector<f32>> segment_lengths_;
+    // f32 (*)[5] wants five-float rows laid end to end.  std::array gives
+    // that with the row width in the type rather than in a multiplication.
+    std::deque<std::vector<std::array<f32, 5>>> segment_polynomials_;
+    std::deque<HSD_SList> particle_nodes_;
     std::deque<HSD_IKHintDesc> ik_hints_;
     std::deque<HSD_ExpDesc> expressions_;
     std::deque<HSD_ByteCodeExpDesc> bytecode_expressions_;
@@ -197,6 +218,8 @@ private:
     std::unordered_map<uint32_t, HSD_ImageDesc*> images_by_offset_;
     std::unordered_map<uint32_t, HSD_TlutDesc*> palettes_by_offset_;
     std::unordered_map<uint32_t, HSD_RObjDesc*> reference_objects_by_offset_;
+    std::unordered_map<uint32_t, HSD_Spline*> splines_by_offset_;
+    std::unordered_map<uint32_t, HSD_SList*> particle_lists_by_offset_;
     std::vector<UnconvertedReference> unconverted_;
     std::string error_;
 };
