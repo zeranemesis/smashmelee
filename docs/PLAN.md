@@ -225,11 +225,12 @@ So `src/melee_port/upstream/archive_convert.cpp` reads through `Archive`,
 which carries the relocation table and answers `kNullOffset` for a field the
 table does not name. The bounds checks come along for free.
 
-**Fifteen structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
+**Twenty structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
 `HSD_MObjDesc`, `HSD_Material`, `HSD_PEDesc`, `HSD_PObjDesc`,
 `HSD_VtxDescList`, `HSD_ShapeSetDesc`, `HSD_EnvelopeDesc`, `HSD_TObjDesc`,
-`HSD_ImageDesc`, `HSD_TlutDesc`, `HSD_TexLODDesc` and `HSD_TObjTevDesc` —
-a whole textured, skinned model. A material converts entire: `renderdesc` is
+`HSD_ImageDesc`, `HSD_TlutDesc`, `HSD_TexLODDesc`, `HSD_TObjTevDesc`,
+`HSD_RObjDesc`, `HSD_IKHintDesc`, `HSD_ExpDesc`, `HSD_ByteCodeExpDesc` and
+`HSD_RvalueList` — a whole textured, skinned, constrained model. A material converts entire: `renderdesc` is
 the only field left null, and deliberately, because it appears exactly once in
 upstream's tree — its own declaration — so nothing reads it.
 
@@ -303,12 +304,20 @@ question about the format along the way, by asserting: a texture whose
 `repeat_s` or `repeat_t` is zero is malformed, not a texture with no repeats,
 because `MakeTextureMtx` divides by them.
 
-That is the mechanism the remaining ~20 structures follow.
+That is the mechanism the remaining ~15 structures follow.
+
+**A function pointer in the archive.** `HSD_ExpDesc` holds
+`f32 (*func)(void*)` — on the console, the address of a routine in the
+executable. There is no host value that means the same thing, and a truncated
+one would be a jump into nothing. The converter leaves it NULL *deliberately*,
+because upstream already handles that: `expLoadDesc` substitutes `dummy_func`.
+The safe answer turned out to be upstream's own answer.
 
 What `unconverted()` still reports, and therefore what remains before a real
-archive converts whole: `HSD_RObjDesc` on a joint, and `HSD_Spline` or the
-particle `HSD_SList` where a joint's union holds one of those instead of a
-display object.
+archive converts whole: `HSD_Spline` or the particle `HSD_SList` where a
+joint's union holds one of those instead of a display object, and an
+`HSD_RObjDesc` whose type is none of the five `HSD_RObjLoadDesc` handles —
+which upstream panics on, so reporting it rather than guessing is the point.
 
 ### What the pointer work actually is
 
@@ -537,10 +546,13 @@ surface exists, and with it the whole scene-object layer.
 
 1. Decide the threading model and write it down (phase 1). Everything above
    phase 1 inherits it, and it is the only remaining design decision.
-2. Convert `HSD_RObjDesc` (phase 2) — the reference objects a joint carries
-   for inverse kinematics and look-at constraints, and the last thing
-   `unconverted()` reports on a model. `robj` and `wobj` are already in the
-   conformance target, so the consumer is there waiting.
+2. Key the HSD ID table on archive offsets rather than descriptor addresses
+   (phase 2). This stopped being a tidiness question: `HSD_RObjResolveRefs`
+   looks a joint up with `HSD_IDGetData((u32) desc->u.joint, NULL)`, and on a
+   64-bit host that truncates a heap address to its low word. Two descriptors
+   whose host addresses differ only above bit 31 would collide, and the
+   failure would be a constraint silently following the wrong bone. Nine of
+   the fourteen remaining pointer casts are this one pattern.
 3. Key the HSD ID table on archive offsets rather than descriptor addresses
    (phase 2) — nine of the fourteen remaining pointer casts, and the port's
    `id` unit already uses 32-bit keys, so this is a decision more than a

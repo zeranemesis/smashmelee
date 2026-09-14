@@ -27,6 +27,7 @@ extern "C" {
 #include <sysdolphin/baselib/jobj.h>
 #include <sysdolphin/baselib/mobj.h>
 #include <sysdolphin/baselib/pobj.h>
+#include <sysdolphin/baselib/robj.h>
 #include <sysdolphin/baselib/tobj.h>
 }
 
@@ -88,6 +89,10 @@ public:
     std::size_t primitive_count() const { return primitives_.size(); }
     std::size_t texture_count() const { return textures_.size(); }
     std::size_t envelope_count() const { return envelopes_.size(); }
+    std::size_t reference_object_count() const
+    {
+        return reference_objects_.size();
+    }
 
     // Every vertex array the converted primitives point at, in the order it
     // met them.  A renderer needs these to answer GXSetArray's extent and
@@ -120,6 +125,8 @@ private:
     HSD_ShapeSetDesc* convert_shape_set(uint32_t offset);
     u8** convert_index_table(uint32_t offset, uint32_t count,
                              const char* what);
+    HSD_RObjDesc* convert_reference_object(uint32_t offset);
+    HSD_RvalueList* convert_rvalue_list(uint32_t offset);
     const void* raw_data(uint32_t offset, uint32_t* extent);
 
     // A big-endian u16, which the archive reader does not offer directly --
@@ -157,6 +164,11 @@ private:
     std::deque<std::vector<HSD_EnvelopeDesc>> envelopes_;
     std::deque<std::vector<HSD_EnvelopeDesc*>> envelope_tables_;
     std::deque<std::vector<u8*>> index_tables_;
+    std::deque<HSD_RObjDesc> reference_objects_;
+    std::deque<HSD_IKHintDesc> ik_hints_;
+    std::deque<HSD_ExpDesc> expressions_;
+    std::deque<HSD_ByteCodeExpDesc> bytecode_expressions_;
+    std::deque<std::vector<HSD_RvalueList>> rvalue_lists_;
     std::deque<std::vector<HSD_VtxDescList>> vertex_descriptors_;
     std::deque<std::string> strings_;
     std::deque<StoredMatrix> matrices_;
@@ -169,6 +181,7 @@ private:
     std::unordered_map<uint32_t, HSD_TObjDesc*> textures_by_offset_;
     std::unordered_map<uint32_t, HSD_ImageDesc*> images_by_offset_;
     std::unordered_map<uint32_t, HSD_TlutDesc*> palettes_by_offset_;
+    std::unordered_map<uint32_t, HSD_RObjDesc*> reference_objects_by_offset_;
     std::vector<UnconvertedReference> unconverted_;
     std::string error_;
 };

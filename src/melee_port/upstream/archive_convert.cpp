@@ -184,6 +184,34 @@ constexpr uint32_t kEnvelopeJoint = 0x00;
 constexpr uint32_t kEnvelopeWeight = 0x04;
 constexpr uint32_t kEnvelopeSize = 0x08;
 
+// HSD_RObjDesc, 0x0C bytes: a chain pointer, flags, and a union whose meaning
+// the top nibble of the flags decides.
+constexpr uint32_t kRObjNext = 0x00;
+constexpr uint32_t kRObjFlags = 0x04;
+constexpr uint32_t kRObjUnion = 0x08;
+constexpr uint32_t kRObjSize = 0x0C;
+
+// HSD_IKHintDesc, HSD_ExpDesc, HSD_ByteCodeExpDesc and HSD_RvalueList are all
+// eight bytes: two floats, two pointers, two pointers, and a word beside a
+// pointer.  An rvalue list is an array ending at the entry whose joint is
+// NULL -- the same relocation-dependent terminator as an envelope run.
+constexpr uint32_t kIKHintBoneLength = 0x00;
+constexpr uint32_t kIKHintRotateX = 0x04;
+constexpr uint32_t kIKHintSize = 0x08;
+constexpr uint32_t kExpFunc = 0x00;
+constexpr uint32_t kExpRvalue = 0x04;
+constexpr uint32_t kExpSize = 0x08;
+constexpr uint32_t kBytecodeExpBytecode = 0x00;
+constexpr uint32_t kBytecodeExpRvalue = 0x04;
+constexpr uint32_t kRvalueFlags = 0x00;
+constexpr uint32_t kRvalueJoint = 0x04;
+constexpr uint32_t kRvalueSize = 0x08;
+
+// A reference-object chain or rvalue list longer than this is a corrupt
+// archive rather than an elaborate rig.
+constexpr uint32_t kMaxReferenceChain = 64;
+constexpr uint32_t kMaxRvalueList = 64;
+
 // Bounds on the two tables, past which the archive is corrupt rather than
 // elaborate.  GX addresses ten position matrices, and a vertex weighted by
 // more than a few joints is not a thing Melee's rigs do.
@@ -534,6 +562,190 @@ HSD_EnvelopeDesc** ArchiveConverter::convert_envelope_table(uint32_t offset)
     error_ = "envelope table at offset " + std::to_string(offset) +
              " has no terminating entry";
     return nullptr;
+}
+
+HSD_RvalueList* ArchiveConverter::convert_rvalue_list(uint32_t offset)
+{
+    std::vector<HSD_RvalueList> list;
+    for (uint32_t index = 0; index <= kMaxRvalueList; ++index) {
+        const uint32_t entry = offset + index * kRvalueSize;
+        if (!archive_.contains_data_range(entry, kRvalueSize)) {
+            error_ = "rvalue list at offset " + std::to_string(offset) +
+                     " runs off the end of the data section";
+            return nullptr;
+        }
+        const auto joint_offset = archive_.data_pointer(entry + kRvalueJoint);
+        if (!joint_offset.has_value()) {
+            error_ = "rvalue list at offset " + std::to_string(offset) +
+                     " has a joint field that is neither null nor relocated";
+            return nullptr;
+        }
+
+        HSD_RvalueList host{};
+        std::memset(&host, 0, sizeof host);
+        host.flags = *archive_.data_word(entry + kRvalueFlags);
+        if (*joint_offset == Archive::kNullOffset) {
+            // loadRvalue stops here, so the terminator's flags never matter.
+            host.joint = nullptr;
+            list.push_back(host);
+            rvalue_lists_.push_back(std::move(list));
+            return rvalue_lists_.back().data();
+        }
+        host.joint = convert_joint_graph(*joint_offset);
+        if (host.joint == nullptr) {
+            return nullptr;
+        }
+        list.push_back(host);
+    }
+
+    error_ = "rvalue list at offset " + std::to_string(offset) +
+             " has no terminating entry";
+    return nullptr;
+}
+
+HSD_RObjDesc* ArchiveConverter::convert_reference_object(uint32_t offset)
+{
+    const auto seen = reference_objects_by_offset_.find(offset);
+    if (seen != reference_objects_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kRObjSize)) {
+        error_ = "reference object at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+    if (reference_objects_.size() > kMaxReferenceChain) {
+        error_ = "reference object chain is longer than an archive can hold";
+        return nullptr;
+    }
+
+    reference_objects_.emplace_back();
+    HSD_RObjDesc& host = reference_objects_.back();
+    std::memset(&host, 0, sizeof host);
+    reference_objects_by_offset_.emplace(offset, &host);
+
+    host.flags = *archive_.data_word(offset + kRObjFlags);
+
+    // The top nibble of the flags says what the union holds.  Upstream's own
+    // switch in HSD_RObjLoadDesc is the specification, and it panics on a
+    // value it does not know, so an unknown type is reported rather than
+    // guessed at here.
+    switch (host.flags & ROBJ_TYPE_MASK) {
+    case REFTYPE_LIMIT:
+        // A float by value, not a pointer.
+        host.u.limit = *archive_.data_float(offset + kRObjUnion);
+        break;
+
+    case REFTYPE_JOBJ: {
+        const auto target = archive_.data_pointer(offset + kRObjUnion);
+        if (target.has_value() && *target != Archive::kNullOffset) {
+            host.u.joint = convert_joint_graph(*target);
+            if (host.u.joint == nullptr) {
+                return nullptr;
+            }
+        }
+        break;
+    }
+
+    case REFTYPE_IKHINT: {
+        const auto target = archive_.data_pointer(offset + kRObjUnion);
+        if (target.has_value() && *target != Archive::kNullOffset) {
+            if (!archive_.contains_data_range(*target, kIKHintSize)) {
+                error_ = "IK hint at offset " + std::to_string(*target) +
+                         " lies outside the archive's data section";
+                return nullptr;
+            }
+            ik_hints_.emplace_back();
+            HSD_IKHintDesc& hint = ik_hints_.back();
+            hint.bone_length =
+                *archive_.data_float(*target + kIKHintBoneLength);
+            hint.rotate_x = *archive_.data_float(*target + kIKHintRotateX);
+            host.u.ik_hint = &hint;
+        }
+        break;
+    }
+
+    case REFTYPE_BYTECODE: {
+        const auto target = archive_.data_pointer(offset + kRObjUnion);
+        if (target.has_value() && *target != Archive::kNullOffset) {
+            if (!archive_.contains_data_range(*target, kExpSize)) {
+                error_ = "bytecode expression at offset " +
+                         std::to_string(*target) +
+                         " lies outside the archive's data section";
+                return nullptr;
+            }
+            bytecode_expressions_.emplace_back();
+            HSD_ByteCodeExpDesc& exp = bytecode_expressions_.back();
+            std::memset(&exp, 0, sizeof exp);
+            const auto bytecode =
+                archive_.data_pointer(*target + kBytecodeExpBytecode);
+            if (bytecode.has_value() && *bytecode != Archive::kNullOffset) {
+                exp.bytecode = const_cast<u8*>(
+                    static_cast<const u8*>(raw_data(*bytecode, nullptr)));
+            }
+            const auto rvalue =
+                archive_.data_pointer(*target + kBytecodeExpRvalue);
+            if (rvalue.has_value() && *rvalue != Archive::kNullOffset) {
+                exp.rvalue = convert_rvalue_list(*rvalue);
+                if (exp.rvalue == nullptr) {
+                    return nullptr;
+                }
+            }
+            host.u.bcexp = &exp;
+        }
+        break;
+    }
+
+    case REFTYPE_EXP: {
+        const auto target = archive_.data_pointer(offset + kRObjUnion);
+        if (target.has_value() && *target != Archive::kNullOffset) {
+            if (!archive_.contains_data_range(*target, kExpSize)) {
+                error_ = "expression at offset " + std::to_string(*target) +
+                         " lies outside the archive's data section";
+                return nullptr;
+            }
+            expressions_.emplace_back();
+            HSD_ExpDesc& exp = expressions_.back();
+            std::memset(&exp, 0, sizeof exp);
+
+            // func stays NULL, deliberately.  The field holds the address of
+            // a function in the console's executable -- there is no host
+            // value that means the same thing, and a truncated one would be
+            // a jump into nothing.  Upstream already handles NULL here:
+            // expLoadDesc substitutes dummy_func.  So the safe answer is also
+            // upstream's own answer, which is why this is a null rather than
+            // a refusal.
+            const auto rvalue = archive_.data_pointer(*target + kExpRvalue);
+            if (rvalue.has_value() && *rvalue != Archive::kNullOffset) {
+                exp.rvalue = convert_rvalue_list(*rvalue);
+                if (exp.rvalue == nullptr) {
+                    return nullptr;
+                }
+            }
+            host.u.exp = &exp;
+        }
+        break;
+    }
+
+    default: {
+        const auto target = archive_.data_pointer(offset + kRObjUnion);
+        if (target.has_value() && *target != Archive::kNullOffset) {
+            note_unconverted(offset, *target, "HSD_RObjDesc::u (unknown type)");
+        }
+        break;
+    }
+    }
+
+    const auto next = archive_.data_pointer(offset + kRObjNext);
+    if (next.has_value() && *next != Archive::kNullOffset) {
+        HSD_RObjDesc* following = convert_reference_object(*next);
+        if (following == nullptr) {
+            return nullptr;
+        }
+        host.next = following;
+    }
+
+    return &host;
 }
 
 HSD_PObjDesc* ArchiveConverter::convert_primitive(uint32_t offset)
@@ -1100,7 +1312,10 @@ HSD_Joint* ArchiveConverter::convert_joint_graph(uint32_t offset)
         }
         const auto robjdesc = archive_.data_pointer(current + kJointRObjDesc);
         if (robjdesc.has_value() && *robjdesc != Archive::kNullOffset) {
-            note_unconverted(current, *robjdesc, "HSD_RObjDesc");
+            host.robjdesc = convert_reference_object(*robjdesc);
+            if (host.robjdesc == nullptr) {
+                return nullptr;
+            }
         }
 
         converted.push_back(current);

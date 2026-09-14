@@ -181,13 +181,13 @@ MELEE_TEST(UpstreamConvert, SeparatesARelocatedZeroFromANullPointer)
 
 MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
 {
-    // A joint that carries a reference object -- inverse kinematics, look-at
-    // constraints and the like.  That converter is still to come, so the
-    // field is left null and the reference is reported.
+    // A joint whose union is a particle list.  Particles are a subsystem of
+    // their own, so the field is left null and the reference is reported.
     DatBuilder builder;
-    const uint32_t robjdesc = builder.allocate(0x1C);
+    const uint32_t particles = builder.allocate(0x08);
     const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
-    builder.pointer(joint + 0x3C, robjdesc);
+    builder.u32(joint + 0x04, JOBJ_PTCL);
+    builder.pointer(joint + 0x10, particles);
 
     const Archive archive = parse(builder);
     REQUIRE(archive.is_valid());
@@ -195,13 +195,148 @@ MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
     ArchiveConverter converter(archive);
     HSD_Joint* host = converter.joint(joint);
     REQUIRE(host != nullptr);
-    CHECK(host->robjdesc == nullptr);
+    CHECK(host->u.ptcl == nullptr);
 
     REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
     CHECK_EQ(converter.unconverted()[0].holder, joint);
-    CHECK_EQ(converter.unconverted()[0].target, robjdesc);
+    CHECK_EQ(converter.unconverted()[0].target, particles);
     CHECK_EQ(std::string(converter.unconverted()[0].kind),
-             std::string("HSD_RObjDesc"));
+             std::string("HSD_SList (particle)"));
+}
+
+MELEE_TEST(UpstreamConvert, ConvertsTheFourReferenceObjectTypesByFlag)
+{
+    // The top nibble of an robj's flags says what its union holds, and
+    // upstream's own switch in HSD_RObjLoadDesc is the specification -- it
+    // panics on a value it does not know, so the converter reports rather
+    // than guesses.  Four types, chained off one joint.
+    DatBuilder builder;
+
+    const uint32_t target_joint = add_joint(builder, 9.0F, 0.0F, 0.0F);
+
+    const uint32_t ik_hint = builder.allocate(0x08);
+    builder.f32(ik_hint + 0x00, 12.5F);
+    builder.f32(ik_hint + 0x04, 0.25F);
+
+    const uint32_t bytecode = builder.allocate(8);
+    builder.u8(bytecode + 0, 0x42);
+
+    const uint32_t rvalues = builder.allocate(2 * 8);
+    builder.u32(rvalues + 0x00, 0xABCU);
+    builder.pointer(rvalues + 0x04, target_joint);
+    // rvalues + 0x08 stays zero and unrelocated: the terminator.
+
+    const uint32_t bcexp = builder.allocate(0x08);
+    builder.pointer(bcexp + 0x00, bytecode);
+    builder.pointer(bcexp + 0x04, rvalues);
+
+    const uint32_t exp = builder.allocate(0x08);
+    // exp + 0x00, the function pointer, stays null on purpose: see below.
+    builder.pointer(exp + 0x04, rvalues);
+
+    const uint32_t robj_exp = builder.allocate(0x0C);
+    builder.u32(robj_exp + 0x04, 0x00000000U); // REFTYPE_EXP
+    builder.pointer(robj_exp + 0x08, exp);
+
+    const uint32_t robj_bytecode = builder.allocate(0x0C);
+    builder.u32(robj_bytecode + 0x04, 0x30000000U); // REFTYPE_BYTECODE
+    builder.pointer(robj_bytecode + 0x08, bcexp);
+    builder.pointer(robj_bytecode + 0x00, robj_exp);
+
+    const uint32_t robj_ik = builder.allocate(0x0C);
+    builder.u32(robj_ik + 0x04, 0x40000000U); // REFTYPE_IKHINT
+    builder.pointer(robj_ik + 0x08, ik_hint);
+    builder.pointer(robj_ik + 0x00, robj_bytecode);
+
+    const uint32_t robj_limit = builder.allocate(0x0C);
+    builder.u32(robj_limit + 0x04, 0x20000000U | 7U); // REFTYPE_LIMIT, type 7
+    builder.f32(robj_limit + 0x08, 1.5F);
+    builder.pointer(robj_limit + 0x00, robj_ik);
+
+    const uint32_t robj_jobj = builder.allocate(0x0C);
+    builder.u32(robj_jobj + 0x04, 0x10000000U); // REFTYPE_JOBJ
+    builder.pointer(robj_jobj + 0x08, target_joint);
+    builder.pointer(robj_jobj + 0x00, robj_limit);
+
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    builder.pointer(joint + 0x3C, robj_jobj);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(joint);
+    REQUIRE(host != nullptr);
+    CHECK_EQ(converter.error(), std::string());
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
+
+    HSD_RObjDesc* jobj_ref = host->robjdesc;
+    REQUIRE(jobj_ref != nullptr);
+    CHECK_EQ(jobj_ref->flags, 0x10000000U);
+    REQUIRE(jobj_ref->u.joint != nullptr);
+    CHECK_NEAR(jobj_ref->u.joint->position.x, 9.0, kTolerance);
+
+    HSD_RObjDesc* limit = jobj_ref->next;
+    REQUIRE(limit != nullptr);
+    // A float by value, not a pointer -- which is why the union has to be
+    // read by type rather than uniformly relocated.
+    CHECK_NEAR(limit->u.limit, 1.5, kTolerance);
+
+    HSD_RObjDesc* ik = limit->next;
+    REQUIRE(ik != nullptr);
+    REQUIRE(ik->u.ik_hint != nullptr);
+    CHECK_NEAR(ik->u.ik_hint->bone_length, 12.5, kTolerance);
+    CHECK_NEAR(ik->u.ik_hint->rotate_x, 0.25, kTolerance);
+
+    HSD_RObjDesc* bc = ik->next;
+    REQUIRE(bc != nullptr);
+    REQUIRE(bc->u.bcexp != nullptr);
+    REQUIRE(bc->u.bcexp->bytecode != nullptr);
+    CHECK_EQ(bc->u.bcexp->bytecode[0], static_cast<u8>(0x42));
+    REQUIRE(bc->u.bcexp->rvalue != nullptr);
+    CHECK_EQ(bc->u.bcexp->rvalue[0].flags, 0xABCU);
+    REQUIRE(bc->u.bcexp->rvalue[0].joint != nullptr);
+    CHECK(bc->u.bcexp->rvalue[0].joint == jobj_ref->u.joint);
+    CHECK(bc->u.bcexp->rvalue[1].joint == nullptr);
+
+    HSD_RObjDesc* expression = bc->next;
+    REQUIRE(expression != nullptr);
+    REQUIRE(expression->u.exp != nullptr);
+    // The function pointer stays null, deliberately.  The field holds the
+    // address of a function in the console's executable; there is no host
+    // value that means the same thing, and a truncated one would be a jump
+    // into nothing.  Upstream already handles null here -- expLoadDesc
+    // substitutes dummy_func -- so the safe answer is also upstream's own.
+    CHECK(expression->u.exp->func == nullptr);
+    REQUIRE(expression->u.exp->rvalue != nullptr);
+    CHECK(expression->next == nullptr);
+}
+
+MELEE_TEST(UpstreamConvert, ReportsAReferenceObjectTypeUpstreamWouldPanicOn)
+{
+    // 0x50000000 is not one of the five HSD_RObjLoadDesc handles, and its
+    // default arm calls HSD_Panic.  Converting the union by guessing would
+    // turn a panic into silent wrong behavior, so the reference is reported.
+    DatBuilder builder;
+    const uint32_t unknown = builder.allocate(0x08);
+    const uint32_t robj = builder.allocate(0x0C);
+    builder.u32(robj + 0x04, 0x50000000U);
+    builder.pointer(robj + 0x08, unknown);
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    builder.pointer(joint + 0x3C, robj);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(joint);
+    REQUIRE(host != nullptr);
+    REQUIRE(host->robjdesc != nullptr);
+
+    REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
+    CHECK_EQ(converter.unconverted()[0].target, unknown);
+    CHECK_EQ(std::string(converter.unconverted()[0].kind),
+             std::string("HSD_RObjDesc::u (unknown type)"));
 }
 
 MELEE_TEST(UpstreamConvert, BuildsASkinnedPrimitivesEnvelopeTable)
