@@ -536,9 +536,9 @@ existing `disc_mount` layer over Aurora DVD.
 **Done when** `gm_801A4510` runs the boot sequence, the title screen and main
 menu respond to a controller, and no menu logic remains in this repository.
 
-**Size.** Large but measured. ~107,000 lines, and 121 of its 144 translation
-units already parse — the 23 that do not are 27 `melee/gm` failures (mostly
-struct-layout assertions and the `PAD_*` constants) and 5 in `melee/lb`.
+**Size.** Large but measured. ~107,000 lines across 155 translation units, and
+117 of them already parse — the 38 that do not are concentrated: 27 in
+`melee/gm`, 5 each in `melee/lb` and `melee/mn`, 1 in `melee/db`.
 `melee/gm` is the densest cluster of remaining work in the whole game, which
 is unsurprising: it is the scene table, and the scene table names everything.
 
