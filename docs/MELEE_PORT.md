@@ -186,6 +186,21 @@ order.
       pixel-engine state, a lighting channel, the position matrix, the vertex
       binding and the draw.  The sequence is asserted, which makes it the
       golden trace phase 3 is built on;
+- [x] convert the texture chain — `HSD_TObjDesc`, `HSD_ImageDesc`,
+      `HSD_TlutDesc`, `HSD_TexLODDesc` and `HSD_TObjTevDesc` — and draw a
+      *textured* model through the same path.  The recorded frame grows the
+      whole texture half: a texture matrix, a texture object built from the
+      image's own dimensions and format, the LOD state, the bind, and a
+      generated texture coordinate.  Pixels and palette entries stay in the
+      archive, in the console's tiled layout, because Aurora's GX reads those
+      formats natively;
+- [x] establish, rather than assume, that a recorded frame cannot be compared
+      whole.  `HSD_TExpSetReg` in upstream's `texp.c` declares `GXColor
+      reg[8]`, never initializes it, and writes only the components a constant
+      names before handing the colour to GX — so `GXSetTevKColor`'s alpha and
+      `GXSetTevColor`'s rgb are read before they are written, in the shipped
+      game.  Compiling upstream with `-ftrivial-auto-var-init=pattern` turns
+      both into `0xAA`, which is the proof.  Golden frames exclude them;
 - [x] answer `GXSetArray`'s extent and byte order from what the load
       recorded, in `src/melee_port/upstream/gx_array_registry.cpp`.  Vertex
       data is not a structure, so it stays in the archive in the console's

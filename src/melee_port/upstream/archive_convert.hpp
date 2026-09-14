@@ -27,6 +27,7 @@ extern "C" {
 #include <sysdolphin/baselib/jobj.h>
 #include <sysdolphin/baselib/mobj.h>
 #include <sysdolphin/baselib/pobj.h>
+#include <sysdolphin/baselib/tobj.h>
 }
 
 namespace meleeboard::hsd {
@@ -85,6 +86,7 @@ public:
     std::size_t joint_count() const { return joints_.size(); }
     std::size_t display_object_count() const { return display_objects_.size(); }
     std::size_t primitive_count() const { return primitives_.size(); }
+    std::size_t texture_count() const { return textures_.size(); }
 
     // Every vertex array the converted primitives point at, in the order it
     // met them.  A renderer needs these to answer GXSetArray's extent and
@@ -94,14 +96,28 @@ public:
         return vertex_arrays_;
     }
 
+    // A texture on its own, for a caller holding an offset rather than a
+    // material that names one -- a texture animation swapping images, or a
+    // fixture assembling a model by hand.
+    HSD_TObjDesc* texture(uint32_t offset);
+
 private:
     HSD_DObjDesc* convert_display_object(uint32_t offset);
     HSD_MObjDesc* convert_material_object(uint32_t offset);
     HSD_PObjDesc* convert_primitive(uint32_t offset);
     HSD_Material* convert_material(uint32_t offset);
     HSD_VtxDescList* convert_vertex_descriptors(uint32_t offset);
+    HSD_TObjDesc* convert_texture(uint32_t offset);
+    HSD_ImageDesc* convert_image(uint32_t offset);
+    HSD_TlutDesc* convert_palette(uint32_t offset);
+    HSD_TexLODDesc* convert_texture_lod(uint32_t offset);
+    HSD_TObjTevDesc* convert_texture_tev(uint32_t offset);
     const void* raw_data(uint32_t offset, uint32_t* extent);
 
+    // A big-endian u16, which the archive reader does not offer directly --
+    // HSD stores several of them beside a byte rather than on a word
+    // boundary, so they are read as two bytes.
+    u16 read_u16(uint32_t offset);
     bool read_vector(uint32_t offset, Vec3& out);
     bool read_matrix(uint32_t offset, MtxPtr& out);
     char* read_string(uint32_t offset);
@@ -121,6 +137,11 @@ private:
     std::deque<HSD_MObjDesc> material_objects_;
     std::deque<HSD_PObjDesc> primitives_;
     std::deque<HSD_Material> materials_;
+    std::deque<HSD_TObjDesc> textures_;
+    std::deque<HSD_ImageDesc> images_;
+    std::deque<HSD_TlutDesc> palettes_;
+    std::deque<HSD_TexLODDesc> texture_lods_;
+    std::deque<HSD_TObjTevDesc> texture_tevs_;
     std::deque<std::vector<HSD_VtxDescList>> vertex_descriptors_;
     std::deque<std::string> strings_;
     std::deque<StoredMatrix> matrices_;
@@ -130,6 +151,9 @@ private:
     std::unordered_map<uint32_t, HSD_MObjDesc*> material_objects_by_offset_;
     std::unordered_map<uint32_t, HSD_PObjDesc*> primitives_by_offset_;
     std::unordered_map<uint32_t, HSD_Material*> materials_by_offset_;
+    std::unordered_map<uint32_t, HSD_TObjDesc*> textures_by_offset_;
+    std::unordered_map<uint32_t, HSD_ImageDesc*> images_by_offset_;
+    std::unordered_map<uint32_t, HSD_TlutDesc*> palettes_by_offset_;
     std::vector<UnconvertedReference> unconverted_;
     std::string error_;
 };

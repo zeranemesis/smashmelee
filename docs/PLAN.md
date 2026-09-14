@@ -225,9 +225,10 @@ So `src/melee_port/upstream/archive_convert.cpp` reads through `Archive`,
 which carries the relocation table and answers `kNullOffset` for a field the
 table does not name. The bounds checks come along for free.
 
-**Six structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
-`HSD_MObjDesc`, `HSD_Material`, `HSD_PObjDesc` and `HSD_VtxDescList` — which
-is a whole model, and enough to draw. Raw data that is not a structure — a
+**Eleven structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
+`HSD_MObjDesc`, `HSD_Material`, `HSD_PObjDesc`, `HSD_VtxDescList`,
+`HSD_TObjDesc`, `HSD_ImageDesc`, `HSD_TlutDesc`, `HSD_TexLODDesc` and
+`HSD_TObjTevDesc` — which is a whole textured model, and enough to draw one. Raw data that is not a structure — a
 vertex array, a display list, a string, a matrix — has no pointers in it and
 no size change on a 64-bit host, so it stays in the archive and is addressed
 where it lies, through `Archive::data_span()`.
@@ -271,7 +272,24 @@ loader or the SDK boundary that moves any of it says so. It is also the
 mechanism phase 3 needs, arriving early — what remains for phase 3 is a real
 GX behind it and a window to put the result in.
 
-That is the mechanism the remaining ~29 structures follow.
+Adding the texture put a second frame beside the first, and the difference
+between them is the whole texture path:
+
+```
+GXLoadTexMtxImm GXInitTexObj GXInitTexObjLOD GXLoadTexObj GXSetTexCoordGen2
+GXPixModeSync GXSetTevKColor GXSetTevColor GXPixModeSync GXSetTevOrder
+...
+GXSetArray GXClearVtxDesc GXSetVtxDesc GXSetVtxAttrFmt GXCallDisplayList
+```
+
+The texture matrix, the texture object built from the image's own dimensions
+and format, the LOD state, the bind, and a generated texture coordinate — none
+of which the untextured frame had. Upstream's `tobj.c` also answered a
+question about the format along the way, by asserting: a texture whose
+`repeat_s` or `repeat_t` is zero is malformed, not a texture with no repeats,
+because `MakeTextureMtx` divides by them.
+
+That is the mechanism the remaining ~24 structures follow.
 
 ### What the pointer work actually is
 
@@ -447,7 +465,22 @@ coroutines over host threads.
 
 **Golden frames.** From phase 3 on, a headless render of a known scene,
 compared against a stored image, catches GX regressions that no unit test
-will.
+will. The call-stream half of that already exists — `tests/hsd/gx_record.cpp`
+— and running it found the first thing a golden frame has to be built around:
+
+> `HSD_TExpSetReg` in `texp.c` declares `GXColor reg[8]`, never initializes
+> it, and writes only the components a constant names before handing the whole
+> colour to GX. So `GXSetTevKColor`'s alpha and `GXSetTevColor`'s rgb are read
+> before they are written — **in the shipped game**, not in this port.
+> Compiling upstream with `-ftrivial-auto-var-init=pattern` turns both into
+> `0xAA`, which is how this was established rather than guessed.
+
+A golden frame therefore cannot pin those components on any host, and a
+recorded trace of a textured draw is only deterministic with them excluded.
+`-ftrivial-auto-var-init=zero` would make them deterministic on GCC and Clang,
+but MSVC has no public equivalent, so relying on it would give confidence on
+two toolchains out of three. The comparison excludes them instead, and says
+why where it does it.
 
 **Assets stay out.** No ISO, no `main.dol`, no game data in this repository,
 ever. A legally obtained disc image is a runtime input.
@@ -457,7 +490,9 @@ ever. A legally obtained disc image is a runtime input.
 1. **Aurora's GX does not draw what the console drew.** TEV chains,
    fog, lighting, and shadows are where this shows. Mitigation: golden frames
    from phase 3 onward, so divergence is caught on the first scene rather
-   than during fighter bring-up.
+   than during fighter bring-up. The recorder makes this cheap and it already
+   works; what it also showed is that some of what the console drew was never
+   determinate in the first place — see *Golden frames* above.
 2. **Audio.** Nothing has been measured. Mitigation: spike musyx against one
    Melee sound bank before committing phase 6's shape.
 3. **The threading model.** A wrong choice in phase 1 is expensive to undo
@@ -483,11 +518,9 @@ surface exists, and with it the whole scene-object layer.
 
 1. Decide the threading model and write it down (phase 1). Everything above
    phase 1 inherits it, and it is the only remaining design decision.
-2. Convert `HSD_TObjDesc` and the image and palette descriptors under it
-   (phase 2) — the largest thing `unconverted()` still reports, and what
-   stands between a recorded draw and a *textured* one. The port's existing
-   `scene.cpp` already decodes all three, so the field offsets are known and
-   already covered by tests.
+2. Convert `HSD_PEDesc` and `HSD_RenderDesc` (phase 2) — the last two
+   things a material can name that `unconverted()` still reports. Neither has
+   a pointer in it, so both are field copies.
 3. Key the HSD ID table on archive offsets rather than descriptor addresses
    (phase 2) — nine of the fourteen remaining pointer casts, and the port's
    `id` unit already uses 32-bit keys, so this is a decision more than a

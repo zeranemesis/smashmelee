@@ -181,13 +181,14 @@ MELEE_TEST(UpstreamConvert, SeparatesARelocatedZeroFromANullPointer)
 
 MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
 {
-    // A material that names a texture.  Textures are the next converter, so
-    // the field is left null -- but the reference is reported, because a
-    // silently untextured model looks exactly like a broken renderer.
+    // A material that names a pixel-engine descriptor.  That one is still to
+    // come, so the field is left null -- but the reference is reported,
+    // because a model that silently draws with the wrong blend state looks
+    // exactly like a broken renderer.
     DatBuilder builder;
-    const uint32_t texture = builder.allocate(0x5C);
+    const uint32_t pedesc = builder.allocate(0x10);
     const uint32_t material_object = builder.allocate(0x18);
-    builder.pointer(material_object + 0x08, texture);
+    builder.pointer(material_object + 0x14, pedesc);
     const uint32_t display_object = builder.allocate(0x10);
     builder.pointer(display_object + 0x08, material_object);
     const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
@@ -201,13 +202,13 @@ MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
     REQUIRE(host != nullptr);
     REQUIRE(host->u.dobjdesc != nullptr);
     REQUIRE(host->u.dobjdesc->mobjdesc != nullptr);
-    CHECK(host->u.dobjdesc->mobjdesc->texdesc == nullptr);
+    CHECK(host->u.dobjdesc->mobjdesc->pedesc == nullptr);
 
     REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
     CHECK_EQ(converter.unconverted()[0].holder, material_object);
-    CHECK_EQ(converter.unconverted()[0].target, texture);
+    CHECK_EQ(converter.unconverted()[0].target, pedesc);
     CHECK_EQ(std::string(converter.unconverted()[0].kind),
-             std::string("HSD_TObjDesc"));
+             std::string("HSD_PEDesc"));
 }
 
 MELEE_TEST(UpstreamConvert, StillRecordsASplineJointAsUnconverted)
@@ -538,6 +539,263 @@ MELEE_TEST(UpstreamConvert, DrawsAConvertedModelThroughTheGamesOwnDisplayPath)
                          "GXSetChanMatColor GXSetChanCtrl GXSetCurrentMtx "
                          "GXLoadPosMtxImm GXSetArray GXClearVtxDesc "
                          "GXSetVtxDesc GXSetVtxAttrFmt GXCallDisplayList"));
+
+    HSD_JObjRemoveAll(jobj);
+}
+
+MELEE_TEST(UpstreamConvert, ConvertsATextureAndEverythingUnderIt)
+{
+    DatBuilder builder;
+
+    // 8x8 RGB5A3: four 4x4 tiles of 32 bytes.
+    const uint32_t pixels = builder.allocate(4 * 32, 32);
+    builder.u8(pixels + 0, 0xAB);
+
+    const uint32_t image = builder.allocate(0x18);
+    builder.pointer(image + 0x00, pixels);
+    builder.u16(image + 0x04, 8);
+    builder.u16(image + 0x06, 8);
+    builder.u32(image + 0x08, 5); // GX_TF_RGB5A3
+    builder.u32(image + 0x0C, 0);
+    builder.f32(image + 0x10, 0.0F);
+    builder.f32(image + 0x14, 3.0F);
+
+    const uint32_t entries = builder.allocate(16 * 2, 32);
+    const uint32_t palette = builder.allocate(0x10);
+    builder.pointer(palette + 0x00, entries);
+    builder.u32(palette + 0x04, 1); // GX_TL_RGB565
+    builder.u32(palette + 0x08, 0x5A5A);
+    builder.u16(palette + 0x0C, 16);
+
+    const uint32_t lod = builder.allocate(0x10);
+    builder.u32(lod + 0x00, 1); // GX_LINEAR
+    builder.f32(lod + 0x04, -0.5F);
+    builder.u8(lod + 0x08, 1);
+    builder.u8(lod + 0x09, 1);
+    builder.u32(lod + 0x0C, 2); // GX_ANISO_4
+
+    const uint32_t tev = builder.allocate(0x20);
+    for (uint32_t index = 0; index < 16; ++index) {
+        builder.u8(tev + index, static_cast<uint8_t>(index + 1));
+    }
+    builder.u8(tev + 0x10, 0x10); // konst.r
+    builder.u8(tev + 0x14, 0x20); // tev0.r
+    builder.u8(tev + 0x18, 0x30); // tev1.r
+    builder.u32(tev + 0x1C, 0xFFFFFFFFU);
+
+    const uint32_t texture = builder.allocate(0x5C);
+    builder.u32(texture + 0x08, 0); // GX_TEXMAP0
+    builder.u32(texture + 0x0C, 4); // GX_TG_TEX0
+    builder.f32(texture + 0x1C, 1.0F); // scale
+    builder.f32(texture + 0x20, 2.0F);
+    builder.f32(texture + 0x24, 3.0F);
+    builder.u32(texture + 0x34, 0); // GX_CLAMP
+    builder.u32(texture + 0x38, 1); // GX_REPEAT
+    builder.u8(texture + 0x3C, 2);  // repeat_s
+    builder.u8(texture + 0x3D, 3);  // repeat_t
+    builder.u32(texture + 0x40, 0x12345678U);
+    builder.f32(texture + 0x44, 0.25F);
+    builder.u32(texture + 0x48, 1); // GX_LINEAR
+    builder.pointer(texture + 0x4C, image);
+    builder.pointer(texture + 0x50, palette);
+    builder.pointer(texture + 0x54, lod);
+    builder.pointer(texture + 0x58, tev);
+
+    const uint32_t material_object = builder.allocate(0x18);
+    builder.pointer(material_object + 0x08, texture);
+    const uint32_t display_object = builder.allocate(0x10);
+    builder.pointer(display_object + 0x08, material_object);
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    builder.pointer(joint + 0x10, display_object);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(joint);
+    REQUIRE(host != nullptr);
+    CHECK_EQ(converter.error(), std::string());
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
+
+    REQUIRE(host->u.dobjdesc != nullptr);
+    REQUIRE(host->u.dobjdesc->mobjdesc != nullptr);
+    HSD_TObjDesc* tobj = host->u.dobjdesc->mobjdesc->texdesc;
+    REQUIRE(tobj != nullptr);
+
+    CHECK_EQ(tobj->id, GX_TEXMAP0);
+    CHECK_EQ(tobj->src, GX_TG_TEX0);
+    CHECK_EQ(tobj->wrap_s, GX_CLAMP);
+    CHECK_EQ(tobj->wrap_t, GX_REPEAT);
+    CHECK_EQ(tobj->repeat_s, static_cast<u8>(2));
+    CHECK_EQ(tobj->repeat_t, static_cast<u8>(3));
+    CHECK_EQ(tobj->blend_flags, 0x12345678U);
+    CHECK_NEAR(tobj->blending, 0.25, kTolerance);
+    CHECK_EQ(tobj->magFilt, GX_LINEAR);
+    CHECK_NEAR(tobj->scale.x, 1.0, kTolerance);
+    CHECK_NEAR(tobj->scale.z, 3.0, kTolerance);
+    CHECK(tobj->next == nullptr);
+
+    REQUIRE(tobj->imagedesc != nullptr);
+    CHECK_EQ(tobj->imagedesc->width, static_cast<u16>(8));
+    CHECK_EQ(tobj->imagedesc->height, static_cast<u16>(8));
+    CHECK_EQ(tobj->imagedesc->format, GX_TF_RGB5A3);
+    CHECK_NEAR(tobj->imagedesc->maxLOD, 3.0, kTolerance);
+    REQUIRE(tobj->imagedesc->image_ptr != nullptr);
+    // The pixels are the archive's own bytes, in the console's tiled layout.
+    CHECK_EQ(static_cast<const u8*>(tobj->imagedesc->image_ptr)[0],
+             static_cast<u8>(0xAB));
+
+    REQUIRE(tobj->tlutdesc != nullptr);
+    CHECK_EQ(tobj->tlutdesc->fmt, GX_TL_RGB565);
+    CHECK_EQ(tobj->tlutdesc->tlut_name, 0x5A5AU);
+    CHECK_EQ(tobj->tlutdesc->n_entries, static_cast<u16>(16));
+    CHECK(tobj->tlutdesc->lut != nullptr);
+
+    REQUIRE(tobj->lod != nullptr);
+    CHECK_EQ(tobj->lod->minFilt, GX_LINEAR);
+    CHECK_NEAR(tobj->lod->LODBias, -0.5, kTolerance);
+    CHECK_EQ(tobj->lod->bias_clamp, static_cast<GXBool>(1));
+    CHECK_EQ(tobj->lod->edgeLODEnable, static_cast<GXBool>(1));
+    CHECK_EQ(tobj->lod->max_anisotropy, GX_ANISO_4);
+
+    REQUIRE(tobj->tev != nullptr);
+    // Sixteen selector bytes in declaration order, starting at color_op.
+    CHECK_EQ(tobj->tev->color_op, static_cast<u8>(1));
+    CHECK_EQ(tobj->tev->alpha_op, static_cast<u8>(2));
+    CHECK_EQ(tobj->tev->alpha_d, static_cast<u8>(16));
+    CHECK_EQ(tobj->tev->konst.r, static_cast<u8>(0x10));
+    CHECK_EQ(tobj->tev->tev0.r, static_cast<u8>(0x20));
+    CHECK_EQ(tobj->tev->tev1.r, static_cast<u8>(0x30));
+    CHECK_EQ(tobj->tev->active, 0xFFFFFFFFU);
+}
+
+MELEE_TEST(UpstreamConvert, DrawsATexturedModelThroughTheGamesOwnDisplayPath)
+{
+    // The same model as the untextured draw, with a texture on its material.
+    // Upstream's tobj and texp decide what that means for GX; this asserts
+    // what they decided.
+    init_object_pools();
+
+    DatBuilder builder;
+    const uint32_t joint = add_triangle_model(builder);
+
+    const uint32_t pixels = builder.allocate(4 * 32, 32);
+    const uint32_t image = builder.allocate(0x18);
+    builder.pointer(image + 0x00, pixels);
+    builder.u16(image + 0x04, 8);
+    builder.u16(image + 0x06, 8);
+    builder.u32(image + 0x08, 5); // GX_TF_RGB5A3
+
+    const uint32_t texture = builder.allocate(0x5C);
+    builder.u32(texture + 0x08, 0); // GX_TEXMAP0
+    builder.u32(texture + 0x0C, 4); // GX_TG_TEX0
+    builder.f32(texture + 0x1C, 1.0F);
+    builder.f32(texture + 0x20, 1.0F);
+    builder.f32(texture + 0x24, 1.0F);
+    builder.u32(texture + 0x34, 0); // GX_CLAMP
+    builder.u32(texture + 0x38, 0);
+    // Upstream asserts on these: MakeTextureMtx divides the repeat count by
+    // the scale, so a texture with a zero repeat is not a texture with no
+    // repeats, it is a malformed one.  That is the format telling us, in
+    // tobj.c's own words, rather than a rule taken from a document.
+    builder.u8(texture + 0x3C, 1);
+    builder.u8(texture + 0x3D, 1);
+    builder.u32(texture + 0x48, 1); // GX_LINEAR magnification
+    builder.pointer(texture + 0x4C, image);
+
+    // add_triangle_model put the material object two allocations before the
+    // primitive; rather than reach back for it, the texture is attached by
+    // walking the converted graph below.
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* descriptor = converter.joint(joint);
+    REQUIRE(descriptor != nullptr);
+    REQUIRE(descriptor->u.dobjdesc != nullptr);
+    REQUIRE(descriptor->u.dobjdesc->mobjdesc != nullptr);
+
+    // Convert the texture on its own and hang it on the material.  A material
+    // that names its texture in the archive gets this for free; doing it by
+    // hand here keeps the fixture readable.
+    HSD_TObjDesc* tobj = converter.texture(texture);
+    REQUIRE(tobj != nullptr);
+    descriptor->u.dobjdesc->mobjdesc->texdesc = tobj;
+
+    meleeboard::hsd::forget_vertex_arrays();
+    meleeboard::hsd::register_vertex_arrays(converter);
+
+    HSD_JObj* jobj = HSD_JObjLoadJoint(descriptor);
+    REQUIRE(jobj != nullptr);
+
+    Mtx view;
+    PSMTXIdentity(view);
+
+    meleeboard::test::gx::reset();
+    HSD_JObjDisp(jobj, view, HSD_TRSP_OPA, 0);
+
+    // The texture reached GX: an object built from the image's dimensions and
+    // format, and loaded onto a texture map.
+    REQUIRE_EQ(meleeboard::test::gx::count("GXInitTexObj"), 1U);
+    const std::string& init = *meleeboard::test::gx::call("GXInitTexObj");
+    CHECK(init.find(", 8, 8, 5, 0, 0, 0)") != std::string::npos);
+    CHECK_EQ(meleeboard::test::gx::count("GXLoadTexObj"), 1U);
+
+    // And the draw still happened.
+    CHECK_EQ(meleeboard::test::gx::count("GXCallDisplayList"), 1U);
+
+    // A texture stage is now in the TEV chain, and a texture coordinate is
+    // generated for it -- neither of which the untextured frame had.
+    CHECK(meleeboard::test::gx::count("GXSetTexCoordGen2") >= 1U);
+    REQUIRE_EQ(meleeboard::test::gx::count("GXSetNumTexGens"), 1U);
+    CHECK_EQ(*meleeboard::test::gx::call("GXSetNumTexGens"),
+             std::string("GXSetNumTexGens(1)"));
+
+    // The frame in full, in order.  Two of its argument values are
+    // deliberately not asserted, and the reason is a real finding rather than
+    // a limitation of this test.
+    //
+    // HSD_TExpSetReg in texp.c declares `GXColor reg[8]` and never
+    // initializes it, then writes only the components a constant names before
+    // handing the whole colour to GX.  So GXSetTevKColor's alpha and
+    // GXSetTevColor's rgb are read before they are written -- in the shipped
+    // game, not in this port.  Compiling upstream with
+    // -ftrivial-auto-var-init=pattern turns both into 0xAA, which is how that
+    // was established rather than guessed.
+    //
+    // A golden frame therefore cannot include those components on any host.
+    // See docs/PLAN.md on fidelity.
+    std::string shape;
+    for (const std::string& name : meleeboard::test::gx::names()) {
+        if (!shape.empty()) {
+            shape += ' ';
+        }
+        shape += name;
+    }
+    CHECK_EQ(shape,
+             std::string("GXLoadTexMtxImm GXInitTexObj GXInitTexObjLOD "
+                         "GXLoadTexObj GXSetTexCoordGen2 GXPixModeSync "
+                         "GXSetTevKColor GXSetTevColor GXPixModeSync "
+                         "GXSetTevOrder GXSetTevColorOp GXSetTevColorIn "
+                         "GXSetTevAlphaOp GXSetTevAlphaIn GXSetTevSwapMode "
+                         "GXSetTevKColorSel GXSetTevKAlphaSel "
+                         "GXSetNumTevStages GXSetNumTexGens GXSetNumChans "
+                         "GXSetCurrentMtx GXLoadPosMtxImm GXSetArray "
+                         "GXClearVtxDesc GXSetVtxDesc GXSetVtxAttrFmt "
+                         "GXCallDisplayList"));
+
+    // The texture matrix is loaded before anything else, and the texture
+    // coordinate is generated through it.
+    CHECK_EQ(*meleeboard::test::gx::call("GXLoadTexMtxImm"),
+             std::string("GXLoadTexMtxImm([1 0 0 0 0 1 0 0 0 0 1 0], 64, 0)"));
+    CHECK_EQ(*meleeboard::test::gx::call("GXSetTexCoordGen2"),
+             std::string("GXSetTexCoordGen2(0, 1, 4, 60, 0, 64)"));
+
+    // The vertex array now reaches GX with a real extent, answered by the
+    // registry from what the load recorded.
+    REQUIRE_EQ(meleeboard::test::gx::count("GXSetArray"), 1U);
+    CHECK(meleeboard::test::gx::call("GXSetArray")->find(", 12, 0)") !=
+          std::string::npos);
 
     HSD_JObjRemoveAll(jobj);
 }

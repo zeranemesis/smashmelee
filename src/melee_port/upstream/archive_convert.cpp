@@ -104,6 +104,69 @@ constexpr uint32_t kVtxStride = 0x12;
 constexpr uint32_t kVtxVertex = 0x14;
 constexpr uint32_t kVtxSize = 0x18;
 
+// HSD_TObjDesc, 0x5C bytes.
+constexpr uint32_t kTObjClassName = 0x00;
+constexpr uint32_t kTObjNext = 0x04;
+constexpr uint32_t kTObjId = 0x08;
+constexpr uint32_t kTObjSrc = 0x0C;
+constexpr uint32_t kTObjRotate = 0x10;
+constexpr uint32_t kTObjScale = 0x1C;
+constexpr uint32_t kTObjTranslate = 0x28;
+constexpr uint32_t kTObjWrapS = 0x34;
+constexpr uint32_t kTObjWrapT = 0x38;
+constexpr uint32_t kTObjRepeatS = 0x3C;
+constexpr uint32_t kTObjRepeatT = 0x3D;
+constexpr uint32_t kTObjBlendFlags = 0x40;
+constexpr uint32_t kTObjBlending = 0x44;
+constexpr uint32_t kTObjMagFilt = 0x48;
+constexpr uint32_t kTObjImageDesc = 0x4C;
+constexpr uint32_t kTObjTlutDesc = 0x50;
+constexpr uint32_t kTObjLod = 0x54;
+constexpr uint32_t kTObjTev = 0x58;
+constexpr uint32_t kTObjSize = 0x5C;
+
+// HSD_ImageDesc, 0x18 bytes.  image_ptr addresses pixels, which are neither
+// a structure nor host-endian -- Aurora's GX reads the console's own tiled
+// formats, so they cross untouched.
+constexpr uint32_t kImagePtr = 0x00;
+constexpr uint32_t kImageWidth = 0x04;
+constexpr uint32_t kImageHeight = 0x06;
+constexpr uint32_t kImageFormat = 0x08;
+constexpr uint32_t kImageMipmap = 0x0C;
+constexpr uint32_t kImageMinLOD = 0x10;
+constexpr uint32_t kImageMaxLOD = 0x14;
+constexpr uint32_t kImageSize = 0x18;
+
+// HSD_TlutDesc, 0x10 bytes.
+constexpr uint32_t kTlutLut = 0x00;
+constexpr uint32_t kTlutFmt = 0x04;
+constexpr uint32_t kTlutName = 0x08;
+constexpr uint32_t kTlutEntries = 0x0C;
+constexpr uint32_t kTlutSize = 0x10;
+
+// HSD_TexLODDesc, 0x10 bytes: GXBool is a byte on the console, so the two
+// flags share a word with two bytes of padding.
+constexpr uint32_t kLodMinFilt = 0x00;
+constexpr uint32_t kLodBias = 0x04;
+constexpr uint32_t kLodBiasClamp = 0x08;
+constexpr uint32_t kLodEdgeEnable = 0x09;
+constexpr uint32_t kLodMaxAnisotropy = 0x0C;
+constexpr uint32_t kLodSize = 0x10;
+
+// HSD_TObjTevDesc, 0x20 bytes: sixteen selector bytes, three GXColors, and a
+// word of flags.  No pointers, so every field crosses by value.
+constexpr uint32_t kTevSelectors = 0x00;
+constexpr uint32_t kTevSelectorCount = 16;
+constexpr uint32_t kTevKonst = 0x10;
+constexpr uint32_t kTevTev0 = 0x14;
+constexpr uint32_t kTevTev1 = 0x18;
+constexpr uint32_t kTevActive = 0x1C;
+constexpr uint32_t kTevSize = 0x20;
+
+// A texture chain longer than this is a corrupt archive rather than a rich
+// material: GX has eight texture maps.
+constexpr uint32_t kMaxTextureChain = 16;
+
 // A vertex descriptor list of more entries than this is a corrupt archive
 // rather than a large mesh: HSD has nine vertex attributes plus eight
 // texture coordinates.
@@ -113,6 +176,16 @@ constexpr uint32_t kMaxVertexDescriptors = 64;
 constexpr uint32_t kDisplayListGranularity = 32;
 
 } // namespace
+
+u16 ArchiveConverter::read_u16(uint32_t offset)
+{
+    const auto high = archive_.data_byte(offset);
+    const auto low = archive_.data_byte(offset + 1);
+    if (!high.has_value() || !low.has_value()) {
+        return 0;
+    }
+    return static_cast<u16>((*high << 8) | *low);
+}
 
 bool ArchiveConverter::read_vector(uint32_t offset, Vec3& out)
 {
@@ -243,9 +316,7 @@ HSD_VtxDescList* ArchiveConverter::convert_vertex_descriptors(uint32_t offset)
         host.comp_type =
             static_cast<GXCompType>(*archive_.data_word(entry + kVtxCompType));
         host.frac = *archive_.data_byte(entry + kVtxFrac);
-        host.stride =
-            static_cast<u16>((*archive_.data_byte(entry + kVtxStride) << 8) |
-                             *archive_.data_byte(entry + kVtxStride + 1));
+        host.stride = read_u16(entry + kVtxStride);
 
         const auto vertex = archive_.data_pointer(entry + kVtxVertex);
         if (vertex.has_value() && *vertex != Archive::kNullOffset) {
@@ -283,12 +354,8 @@ HSD_PObjDesc* ArchiveConverter::convert_primitive(uint32_t offset)
     std::memset(&host, 0, sizeof host);
     primitives_by_offset_.emplace(offset, &host);
 
-    host.flags = static_cast<u16>((*archive_.data_byte(offset + kPObjFlags)
-                                   << 8) |
-                                  *archive_.data_byte(offset + kPObjFlags + 1));
-    host.n_display =
-        static_cast<u16>((*archive_.data_byte(offset + kPObjDisplayCount) << 8) |
-                         *archive_.data_byte(offset + kPObjDisplayCount + 1));
+    host.flags = read_u16(offset + kPObjFlags);
+    host.n_display = read_u16(offset + kPObjDisplayCount);
 
     const auto class_name = archive_.data_pointer(offset + kPObjClassName);
     if (class_name.has_value() && *class_name != Archive::kNullOffset) {
@@ -337,6 +404,235 @@ HSD_PObjDesc* ArchiveConverter::convert_primitive(uint32_t offset)
     return &host;
 }
 
+HSD_TObjDesc* ArchiveConverter::texture(uint32_t offset)
+{
+    error_.clear();
+    if (offset == Archive::kNullOffset) {
+        return nullptr;
+    }
+    return convert_texture(offset);
+}
+
+HSD_ImageDesc* ArchiveConverter::convert_image(uint32_t offset)
+{
+    const auto seen = images_by_offset_.find(offset);
+    if (seen != images_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kImageSize)) {
+        error_ = "image at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    images_.emplace_back();
+    HSD_ImageDesc& host = images_.back();
+    std::memset(&host, 0, sizeof host);
+    images_by_offset_.emplace(offset, &host);
+
+    host.width = read_u16(offset + kImageWidth);
+    host.height = read_u16(offset + kImageHeight);
+    host.format =
+        static_cast<GXTexFmt>(*archive_.data_word(offset + kImageFormat));
+    host.mipmap = *archive_.data_word(offset + kImageMipmap);
+    host.minLOD = *archive_.data_float(offset + kImageMinLOD);
+    host.maxLOD = *archive_.data_float(offset + kImageMaxLOD);
+
+    // Pixels are not a structure and are not host-endian either: Aurora's GX
+    // reads the console's own tiled formats, so they stay where they lie.
+    const auto pixels = archive_.data_pointer(offset + kImagePtr);
+    if (pixels.has_value() && *pixels != Archive::kNullOffset) {
+        host.image_ptr = const_cast<void*>(raw_data(*pixels, nullptr));
+        if (host.image_ptr == nullptr) {
+            error_ = "image at offset " + std::to_string(offset) +
+                     " points at pixels outside the data section";
+            return nullptr;
+        }
+    }
+
+    return &host;
+}
+
+HSD_TlutDesc* ArchiveConverter::convert_palette(uint32_t offset)
+{
+    const auto seen = palettes_by_offset_.find(offset);
+    if (seen != palettes_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kTlutSize)) {
+        error_ = "palette at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    palettes_.emplace_back();
+    HSD_TlutDesc& host = palettes_.back();
+    std::memset(&host, 0, sizeof host);
+    palettes_by_offset_.emplace(offset, &host);
+
+    host.fmt = static_cast<GXTlutFmt>(*archive_.data_word(offset + kTlutFmt));
+    host.tlut_name = *archive_.data_word(offset + kTlutName);
+    host.n_entries = read_u16(offset + kTlutEntries);
+
+    const auto lut = archive_.data_pointer(offset + kTlutLut);
+    if (lut.has_value() && *lut != Archive::kNullOffset) {
+        host.lut = const_cast<void*>(raw_data(*lut, nullptr));
+        if (host.lut == nullptr) {
+            error_ = "palette at offset " + std::to_string(offset) +
+                     " points at entries outside the data section";
+            return nullptr;
+        }
+    }
+
+    return &host;
+}
+
+HSD_TexLODDesc* ArchiveConverter::convert_texture_lod(uint32_t offset)
+{
+    if (!archive_.contains_data_range(offset, kLodSize)) {
+        error_ = "texture LOD descriptor at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    texture_lods_.emplace_back();
+    HSD_TexLODDesc& host = texture_lods_.back();
+    std::memset(&host, 0, sizeof host);
+    host.minFilt =
+        static_cast<GXTexFilter>(*archive_.data_word(offset + kLodMinFilt));
+    host.LODBias = *archive_.data_float(offset + kLodBias);
+    host.bias_clamp = *archive_.data_byte(offset + kLodBiasClamp);
+    host.edgeLODEnable = *archive_.data_byte(offset + kLodEdgeEnable);
+    host.max_anisotropy = static_cast<GXAnisotropy>(
+        *archive_.data_word(offset + kLodMaxAnisotropy));
+    return &host;
+}
+
+HSD_TObjTevDesc* ArchiveConverter::convert_texture_tev(uint32_t offset)
+{
+    if (!archive_.contains_data_range(offset, kTevSize)) {
+        error_ = "texture TEV descriptor at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    texture_tevs_.emplace_back();
+    HSD_TObjTevDesc& host = texture_tevs_.back();
+    std::memset(&host, 0, sizeof host);
+
+    // Sixteen selector bytes in declaration order, which is also their order
+    // in the structure on both sides -- they are bytes, so nothing moves.
+    u8* selectors = &host.color_op;
+    for (uint32_t index = 0; index < kTevSelectorCount; ++index) {
+        selectors[index] =
+            *archive_.data_byte(offset + kTevSelectors + index);
+    }
+
+    const auto colour = [this, offset](uint32_t field, GXColor& out) {
+        out.r = *archive_.data_byte(offset + field + 0);
+        out.g = *archive_.data_byte(offset + field + 1);
+        out.b = *archive_.data_byte(offset + field + 2);
+        out.a = *archive_.data_byte(offset + field + 3);
+    };
+    colour(kTevKonst, host.konst);
+    colour(kTevTev0, host.tev0);
+    colour(kTevTev1, host.tev1);
+    host.active = *archive_.data_word(offset + kTevActive);
+    return &host;
+}
+
+HSD_TObjDesc* ArchiveConverter::convert_texture(uint32_t offset)
+{
+    const auto seen = textures_by_offset_.find(offset);
+    if (seen != textures_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kTObjSize)) {
+        error_ = "texture at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    textures_.emplace_back();
+    HSD_TObjDesc& host = textures_.back();
+    std::memset(&host, 0, sizeof host);
+    textures_by_offset_.emplace(offset, &host);
+
+    host.id = static_cast<GXTexMapID>(*archive_.data_word(offset + kTObjId));
+    host.src = static_cast<GXTexGenSrc>(*archive_.data_word(offset + kTObjSrc));
+    host.wrap_s =
+        static_cast<GXTexWrapMode>(*archive_.data_word(offset + kTObjWrapS));
+    host.wrap_t =
+        static_cast<GXTexWrapMode>(*archive_.data_word(offset + kTObjWrapT));
+    host.repeat_s = *archive_.data_byte(offset + kTObjRepeatS);
+    host.repeat_t = *archive_.data_byte(offset + kTObjRepeatT);
+    host.blend_flags = *archive_.data_word(offset + kTObjBlendFlags);
+    host.blending = *archive_.data_float(offset + kTObjBlending);
+    host.magFilt =
+        static_cast<GXTexFilter>(*archive_.data_word(offset + kTObjMagFilt));
+
+    if (!read_vector(offset + kTObjRotate, host.rotate) ||
+        !read_vector(offset + kTObjScale, host.scale) ||
+        !read_vector(offset + kTObjTranslate, host.translate)) {
+        error_ = "texture at offset " + std::to_string(offset) +
+                 " has a transform outside the data section";
+        return nullptr;
+    }
+
+    const auto class_name = archive_.data_pointer(offset + kTObjClassName);
+    if (class_name.has_value() && *class_name != Archive::kNullOffset) {
+        host.class_name = read_string(*class_name);
+    }
+
+    const auto imagedesc = archive_.data_pointer(offset + kTObjImageDesc);
+    if (imagedesc.has_value() && *imagedesc != Archive::kNullOffset) {
+        host.imagedesc = convert_image(*imagedesc);
+        if (host.imagedesc == nullptr) {
+            return nullptr;
+        }
+    }
+
+    const auto tlutdesc = archive_.data_pointer(offset + kTObjTlutDesc);
+    if (tlutdesc.has_value() && *tlutdesc != Archive::kNullOffset) {
+        host.tlutdesc = convert_palette(*tlutdesc);
+        if (host.tlutdesc == nullptr) {
+            return nullptr;
+        }
+    }
+
+    const auto lod = archive_.data_pointer(offset + kTObjLod);
+    if (lod.has_value() && *lod != Archive::kNullOffset) {
+        host.lod = convert_texture_lod(*lod);
+        if (host.lod == nullptr) {
+            return nullptr;
+        }
+    }
+
+    const auto tev = archive_.data_pointer(offset + kTObjTev);
+    if (tev.has_value() && *tev != Archive::kNullOffset) {
+        host.tev = convert_texture_tev(*tev);
+        if (host.tev == nullptr) {
+            return nullptr;
+        }
+    }
+
+    const auto next = archive_.data_pointer(offset + kTObjNext);
+    if (next.has_value() && *next != Archive::kNullOffset) {
+        if (textures_.size() > kMaxTextureChain) {
+            error_ = "texture chain from offset " + std::to_string(offset) +
+                     " is longer than GX has texture maps";
+            return nullptr;
+        }
+        HSD_TObjDesc* following = convert_texture(*next);
+        if (following == nullptr) {
+            return nullptr;
+        }
+        host.next = following;
+    }
+
+    return &host;
+}
+
 HSD_MObjDesc* ArchiveConverter::convert_material_object(uint32_t offset)
 {
     const auto seen = material_objects_by_offset_.find(offset);
@@ -369,13 +665,17 @@ HSD_MObjDesc* ArchiveConverter::convert_material_object(uint32_t offset)
         }
     }
 
-    // Textures, the TEV render descriptor and the pixel-engine descriptor are
-    // the next three converters.  A material that names one is still usable
-    // without it -- it draws untextured -- so they are recorded, not refused.
     const auto texdesc = archive_.data_pointer(offset + kMObjTexDesc);
     if (texdesc.has_value() && *texdesc != Archive::kNullOffset) {
-        note_unconverted(offset, *texdesc, "HSD_TObjDesc");
+        host.texdesc = convert_texture(*texdesc);
+        if (host.texdesc == nullptr) {
+            return nullptr;
+        }
     }
+
+    // The TEV render descriptor and the pixel-engine descriptor are the next
+    // two converters.  A material that names one is still usable without it,
+    // so they are recorded rather than refused.
     const auto renderdesc = archive_.data_pointer(offset + kMObjRenderDesc);
     if (renderdesc.has_value() && *renderdesc != Archive::kNullOffset) {
         note_unconverted(offset, *renderdesc, "HSD_RenderDesc");
