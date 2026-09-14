@@ -826,6 +826,33 @@ a posted request is queued, and completion is delivered as an interrupt —
 held off while interrupts are masked, exactly as the alarm scheduler holds an
 alarm off. A test pins that directly.
 
+Two more things the tree says about the mixer, both found while looking for
+what it would need and both materially reducing its risk.
+
+**A Melee sound bank stores the voice parameter block verbatim.** `synth.c`'s
+own `struct foo` — the SFX entry — is `{ next, sound id, voice count, audio
+parameter, AXPBADDR, AXPBADPCM, AXPBADPCMLOOP }`, and
+`HSD_SynthPStreamHeaderCallback` casts straight out of the loaded bytes into
+`AXSetVoiceAddr` and `AXSetVoiceAdpcm`. So the mixer's input is not a format
+to be interpreted: it is the same three structures the disc already holds,
+including the eight ADPCM coefficient pairs and the predictor state.
+
+**The address units are named in the tree.** `SYNSYNTH` in the bundled
+`<dolphin/syn.h>` carries `aramBaseWord`, `aramBaseByte` *and*
+`aramBaseNibble` — three bases, one per sample format, which is what says an
+`AXPBADDR` address is counted in nibbles for ADPCM, bytes for 8-bit PCM and
+words for 16-bit. `WTADPCM` in the same header is `AXPBADPCM` followed by
+exactly the three fields of `AXPBADPCMLOOP`, which is the same layout seen
+from the bank's side.
+
+What is still **not** in either tree, and will have to be marked as unsourced
+the way `GXNtsc480IntDf`'s filter kernel is: the numeric values of `AXPBADDR`'s
+`format` field, and the ADPCM arithmetic itself. The second is publicly
+documented — an 8-byte block is a header byte of predictor index and scale
+followed by fourteen 4-bit samples, run through the coefficient pair with a
+two-sample history — so it does not need to be taken from anyone's
+implementation.
+
 What remains for this phase, and it is now the whole of it:
 
 - **the mixer.** Read the `AXPB` of each held voice once per AX frame, fetch
