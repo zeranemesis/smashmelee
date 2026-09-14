@@ -112,6 +112,7 @@ private:
     HSD_TlutDesc* convert_palette(uint32_t offset);
     HSD_TexLODDesc* convert_texture_lod(uint32_t offset);
     HSD_TObjTevDesc* convert_texture_tev(uint32_t offset);
+    HSD_PEDesc* convert_pixel_engine(uint32_t offset);
     const void* raw_data(uint32_t offset, uint32_t* extent);
 
     // A big-endian u16, which the archive reader does not offer directly --
@@ -142,6 +143,7 @@ private:
     std::deque<HSD_TlutDesc> palettes_;
     std::deque<HSD_TexLODDesc> texture_lods_;
     std::deque<HSD_TObjTevDesc> texture_tevs_;
+    std::deque<HSD_PEDesc> pixel_engines_;
     std::deque<std::vector<HSD_VtxDescList>> vertex_descriptors_;
     std::deque<std::string> strings_;
     std::deque<StoredMatrix> matrices_;

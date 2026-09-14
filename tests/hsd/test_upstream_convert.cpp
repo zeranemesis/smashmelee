@@ -181,12 +181,46 @@ MELEE_TEST(UpstreamConvert, SeparatesARelocatedZeroFromANullPointer)
 
 MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
 {
-    // A material that names a pixel-engine descriptor.  That one is still to
-    // come, so the field is left null -- but the reference is reported,
-    // because a model that silently draws with the wrong blend state looks
+    // A primitive whose union names a shape set or an envelope table.  Those
+    // are still to come, so the field is left null -- but the reference is
+    // reported, because a model that silently loses its skinning looks
     // exactly like a broken renderer.
     DatBuilder builder;
-    const uint32_t pedesc = builder.allocate(0x10);
+    const uint32_t envelopes = builder.allocate(0x10);
+    const uint32_t primitive = builder.allocate(0x18);
+    builder.pointer(primitive + 0x14, envelopes);
+    const uint32_t display_object = builder.allocate(0x10);
+    builder.pointer(display_object + 0x0C, primitive);
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    builder.pointer(joint + 0x10, display_object);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(joint);
+    REQUIRE(host != nullptr);
+    REQUIRE(host->u.dobjdesc != nullptr);
+    REQUIRE(host->u.dobjdesc->pobjdesc != nullptr);
+    CHECK(host->u.dobjdesc->pobjdesc->u.joint == nullptr);
+
+    REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
+    CHECK_EQ(converter.unconverted()[0].holder, primitive);
+    CHECK_EQ(converter.unconverted()[0].target, envelopes);
+    CHECK_EQ(std::string(converter.unconverted()[0].kind),
+             std::string("HSD_PObjDesc::u"));
+}
+
+MELEE_TEST(UpstreamConvert, ConvertsThePixelEngineDescriptorByValue)
+{
+    // Twelve bytes, every one of them a u8, so the structure is the same size
+    // on the console and here -- which matters, because MObjLoad copies it
+    // with memcpy(sizeof(HSD_PEDesc)) rather than field by field.
+    DatBuilder builder;
+    const uint32_t pedesc = builder.allocate(12);
+    for (uint32_t index = 0; index < 12; ++index) {
+        builder.u8(pedesc + index, static_cast<uint8_t>(index + 1));
+    }
     const uint32_t material_object = builder.allocate(0x18);
     builder.pointer(material_object + 0x14, pedesc);
     const uint32_t display_object = builder.allocate(0x10);
@@ -202,13 +236,44 @@ MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
     REQUIRE(host != nullptr);
     REQUIRE(host->u.dobjdesc != nullptr);
     REQUIRE(host->u.dobjdesc->mobjdesc != nullptr);
-    CHECK(host->u.dobjdesc->mobjdesc->pedesc == nullptr);
+    HSD_PEDesc* pe = host->u.dobjdesc->mobjdesc->pedesc;
+    REQUIRE(pe != nullptr);
 
-    REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
-    CHECK_EQ(converter.unconverted()[0].holder, material_object);
-    CHECK_EQ(converter.unconverted()[0].target, pedesc);
-    CHECK_EQ(std::string(converter.unconverted()[0].kind),
-             std::string("HSD_PEDesc"));
+    CHECK_EQ(pe->flags, static_cast<u8>(1));
+    CHECK_EQ(pe->ref0, static_cast<u8>(2));
+    CHECK_EQ(pe->dst_alpha, static_cast<u8>(4));
+    CHECK_EQ(pe->src_factor, static_cast<u8>(6));
+    CHECK_EQ(pe->alpha_comp1, static_cast<u8>(12));
+
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
+}
+
+MELEE_TEST(UpstreamConvert, LeavesRenderDescAloneWithoutReportingIt)
+{
+    // HSD_MObjDesc::renderdesc appears exactly once in upstream's tree -- its
+    // own declaration in mobj.h.  Nothing reads it, so leaving it null is
+    // correct, and listing it as unconverted would put something in that list
+    // that can never be cleared.  A caller is told the list must be empty
+    // before it renders; that only holds if everything in it is real work.
+    DatBuilder builder;
+    const uint32_t renderdesc = builder.allocate(0x10);
+    const uint32_t material_object = builder.allocate(0x18);
+    builder.pointer(material_object + 0x10, renderdesc);
+    const uint32_t display_object = builder.allocate(0x10);
+    builder.pointer(display_object + 0x08, material_object);
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    builder.pointer(joint + 0x10, display_object);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(joint);
+    REQUIRE(host != nullptr);
+    REQUIRE(host->u.dobjdesc != nullptr);
+    REQUIRE(host->u.dobjdesc->mobjdesc != nullptr);
+    CHECK(host->u.dobjdesc->mobjdesc->renderdesc == nullptr);
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
 }
 
 MELEE_TEST(UpstreamConvert, StillRecordsASplineJointAsUnconverted)

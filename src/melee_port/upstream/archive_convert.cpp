@@ -163,6 +163,11 @@ constexpr uint32_t kTevTev1 = 0x18;
 constexpr uint32_t kTevActive = 0x1C;
 constexpr uint32_t kTevSize = 0x20;
 
+// HSD_PEDesc, twelve bytes and every one of them a u8, so the structure is
+// the same size on both sides -- which matters, because MObjLoad copies it
+// with memcpy(sizeof(HSD_PEDesc)) rather than field by field.
+constexpr uint32_t kPEDescSize = 12;
+
 // A texture chain longer than this is a corrupt archive rather than a rich
 // material: GX has eight texture maps.
 constexpr uint32_t kMaxTextureChain = 16;
@@ -541,6 +546,27 @@ HSD_TObjTevDesc* ArchiveConverter::convert_texture_tev(uint32_t offset)
     return &host;
 }
 
+HSD_PEDesc* ArchiveConverter::convert_pixel_engine(uint32_t offset)
+{
+    if (!archive_.contains_data_range(offset, kPEDescSize)) {
+        error_ = "pixel-engine descriptor at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    pixel_engines_.emplace_back();
+    HSD_PEDesc& host = pixel_engines_.back();
+    std::memset(&host, 0, sizeof host);
+    static_assert(sizeof(HSD_PEDesc) == kPEDescSize,
+                  "HSD_PEDesc is all u8 and must not change size on a host");
+
+    u8* fields = &host.flags;
+    for (uint32_t index = 0; index < kPEDescSize; ++index) {
+        fields[index] = *archive_.data_byte(offset + index);
+    }
+    return &host;
+}
+
 HSD_TObjDesc* ArchiveConverter::convert_texture(uint32_t offset)
 {
     const auto seen = textures_by_offset_.find(offset);
@@ -673,17 +699,20 @@ HSD_MObjDesc* ArchiveConverter::convert_material_object(uint32_t offset)
         }
     }
 
-    // The TEV render descriptor and the pixel-engine descriptor are the next
-    // two converters.  A material that names one is still usable without it,
-    // so they are recorded rather than refused.
-    const auto renderdesc = archive_.data_pointer(offset + kMObjRenderDesc);
-    if (renderdesc.has_value() && *renderdesc != Archive::kNullOffset) {
-        note_unconverted(offset, *renderdesc, "HSD_RenderDesc");
-    }
     const auto pedesc = archive_.data_pointer(offset + kMObjPEDesc);
     if (pedesc.has_value() && *pedesc != Archive::kNullOffset) {
-        note_unconverted(offset, *pedesc, "HSD_PEDesc");
+        host.pedesc = convert_pixel_engine(*pedesc);
+        if (host.pedesc == nullptr) {
+            return nullptr;
+        }
     }
+
+    // renderdesc is deliberately left null and deliberately not reported.
+    // The field appears exactly once in the whole upstream tree -- its own
+    // declaration in mobj.h -- so nothing reads it, and listing it as
+    // unconverted would put something in that list that can never be cleared.
+    // A caller is told the list has to be empty before it renders; that only
+    // holds if everything in it is real work.
 
     return &host;
 }
