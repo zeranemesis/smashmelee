@@ -170,6 +170,8 @@ else ()
             sysdolphin/baselib/state
             sysdolphin/baselib/shadow
             sysdolphin/baselib/displayfunc
+            sysdolphin/baselib/fog
+            sysdolphin/baselib/video
             sysdolphin/baselib/bytecode
             # The particle system, which owns the skinning helper jobj and
             # dobj build envelope matrices with.
@@ -193,6 +195,7 @@ else ()
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/archive_convert.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/descriptor_arena.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/os_scheduler.cpp
+            ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/vi_bridge.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/gx_array_registry.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_core.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_fobj.cpp

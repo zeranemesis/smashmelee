@@ -66,6 +66,12 @@ std::size_t armed_alarms();
 std::size_t deferred_callbacks();
 bool interrupts_enabled();
 
+// Delivers `handler(argument)` the way an interrupt arrives: now if interrupts
+// are enabled, queued until they are restored if they are not.  The VI bridge
+// sends retrace through here, because retrace *is* an interrupt on the console
+// and the game's critical sections are written expecting to hold it off.
+void deliver_as_interrupt(void (*handler)(u32), u32 argument);
+
 // Set when advance_frame() gives up on an alarm that re-arms in the past --
 // which would otherwise spin forever.  A test reads it; a runtime should
 // treat it as a bug in the alarm's period.

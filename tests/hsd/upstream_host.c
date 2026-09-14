@@ -17,12 +17,18 @@
 #include <sysdolphin/baselib/video.h>
 
 // OSAlloc.h declares this as the heap OSAlloc()/OSFree() use.
+//
+// These four used to be declared here with hand-written signatures, which
+// nothing checked until the prelude started pulling <dolphin/os.h> in.  They
+// now match Aurora's declarations exactly -- OSHeapHandle rather than int, u32
+// rather than unsigned long, const char* rather than char* -- which is what a
+// build against Aurora's real OS would have required anyway.
 volatile int __OSCurrHeap = 0;
 
 // HSD pools hand their objects to GX, which wants 32-byte alignment.
 #define MELEE_HOST_ALIGNMENT 32
 
-void* OSAllocFromHeap(int heap, unsigned long size)
+void* OSAllocFromHeap(OSHeapHandle heap, u32 size)
 {
     const size_t bytes = size != 0 ? (size_t) size : MELEE_HOST_ALIGNMENT;
     (void) heap;
@@ -39,7 +45,7 @@ void* OSAllocFromHeap(int heap, unsigned long size)
 #endif
 }
 
-void OSFreeToHeap(int heap, void* pointer)
+void OSFreeToHeap(OSHeapHandle heap, void* pointer)
 {
     (void) heap;
 #ifdef _MSC_VER
@@ -49,7 +55,7 @@ void OSFreeToHeap(int heap, void* pointer)
 #endif
 }
 
-long OSCheckHeap(int heap)
+s32 OSCheckHeap(OSHeapHandle heap)
 {
     (void) heap;
     return 0;
@@ -59,7 +65,7 @@ long OSCheckHeap(int heap)
 // would pull in VI, GX and the framebuffers.
 int HSD_GetHeap(void) { return 0; }
 
-void OSReport(char* format, ...)
+void OSReport(const char* format, ...)
 {
     va_list arguments;
     va_start(arguments, format);
@@ -103,6 +109,13 @@ void OSPanic(const char* file, int line, const char* message, ...)
 // off instead.
 unsigned int VIGetNextField(void) { return 0; }
 
+// lb_0195.c sets the controller polling period with this, then arms a periodic
+// alarm at the same rate.  The alarm is what actually drives sampling in this
+// port, so the rate is recorded rather than acted on.
+static unsigned long g_pad_sampling_rate_msec = 0;
+void PADSetSamplingRate(unsigned long msec) { g_pad_sampling_rate_msec = msec; }
+unsigned long melee_pad_sampling_rate(void) { return g_pad_sampling_rate_msec; }
+
 
 
 // The two pieces of HSD that live in units still at the boot boundary.
@@ -113,14 +126,3 @@ unsigned int VIGetNextField(void) { return 0; }
 // HSD_RP_SCREEN here is what puts the camera on the ordinary path.
 HSD_RenderPass HSD_GetCurrentRenderPass(void) { return HSD_RP_SCREEN; }
 
-// HSD_VIData is defined in video.c, which needs three SDK symbols Aurora does
-// not have (GXInitFogAdjTable is fog.c's; video.c's own are
-// VIPadFrameBufferWidth, GXWaitDrawDone and the GXNtsc480IntDf render mode).
-// Defining it here is deliberate and self-announcing: the day video.c joins
-// the target, the linker reports a duplicate and this goes away.
-//
-// It is zero, which means a render mode of all zeroes.  A test that cares
-// what cobj computes from the viewport fills the fields it needs first --
-// which is the useful arrangement anyway, because it makes the video state an
-// input to the test rather than a global the test has to work around.
-HSD_VIInfo HSD_VIData;

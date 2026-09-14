@@ -65,8 +65,10 @@ SHIM_PLATFORM = """\
 """
 
 SHIM_FORCE = """\
-/* Parsed before every translation unit: take the host declarations first, then
-   drop the Metrowerks fabsf macro that would rewrite them. */
+/* Parsed before every translation unit when Aurora's headers are NOT in use.
+   The --aurora-headers path force-includes the repository's real prelude
+   instead, so the tool measures the configuration the build actually
+   compiles. */
 #include <math.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -392,39 +394,21 @@ def main() -> int:
                 print("run: git submodule update --init --depth 1 "
                       "extern/aurora", file=sys.stderr)
                 return 2
-            # Aurora's headers give the host-correct integer widths, but keep
-            # the SDK spellings the upstream platform header removes and name
-            # the 3-vector Vec rather than Vec3.
-            force.write_text(SHIM_FORCE + """
-#include <dolphin/types.h>
-#include <dolphin/mtx/GeoTypes.h>
-#ifndef BOOL
-typedef int BOOL;
-#endif
-#ifndef TRUE
-#define TRUE 1
-#endif
-#ifndef FALSE
-#define FALSE 0
-#endif
-typedef Vec Vec3;
-typedef S16Vec S16Vec3;
-
-/* Aurora's GeoTypes.h stops at Vec and S16Vec; the SDK also names these. */
-typedef struct { f32 x, y; } Vec2, *Vec2Ptr, Point2d, *Point2dPtr;
-typedef struct { s8 x, y, z; } S8Vec3, S8Vec, *S8Vec3Ptr, *S8VecPtr;
-typedef struct { u8 x, y, z, w; } U8Vec4, *U8Vec4Ptr;
-typedef struct { int x, y; } IntVec2, *IntVec2Ptr;
-typedef struct { s32 x, y; } S32Vec2, *S32Vec2Ptr;
-typedef struct { int x, y, z; } IntVec3, *IntVec3Ptr;
-typedef struct { s32 x, y, z; } S32Vec, S32Vec3, *S32VecPtr, *S32Vec3Ptr;
-typedef Quaternion Vec4;
-
-/* Aurora's GX headers do not carry the TEV clamp modes yet. */
-typedef enum _GXTevClampMode {
-    GX_TC_LINEAR, GX_TC_GE, GX_TC_EQ, GX_TC_LE, GX_MAX_TEVCLAMPMODE
-} GXTevClampMode;
-""")
+            # The repository's real prelude, not a copy of it.
+            #
+            # This used to be a second transcription of
+            # include/melee/port/dolphin_compat.h, and it had drifted: the
+            # build had grown _USE_MATH_DEFINES, the M_PI fallbacks, the GX
+            # umbrella include, the GXSetArray adapter and a dozen SDK
+            # spellings this file never learned.  So the tool was measuring a
+            # configuration nobody builds, and reporting failures the real
+            # build does not have.  One copy now.
+            prelude = (repository / "include" / "melee" / "port" /
+                       "dolphin_compat.h")
+            if not prelude.is_file():
+                print(f"missing prelude: {prelude}", file=sys.stderr)
+                return 2
+            force.write_text(f'#include "{prelude}"\n')
         else:
             force.write_text(SHIM_FORCE)
 

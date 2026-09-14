@@ -19,6 +19,7 @@
 //     address of the matrix.  A trace that says a camera loaded *some* matrix
 //     is worth nothing; the numbers are the whole content of the call.
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -689,3 +690,203 @@ extern "C" void GXSetScissor(u32 left, u32 top, u32 width, u32 height)
 }
 
 extern "C" void GXPixModeSync(void) { record("GXPixModeSync"); }
+
+extern "C" void GXWaitDrawDone(void) { record("GXWaitDrawDone"); }
+
+extern "C" void GXSetDrawDone(void) { record("GXSetDrawDone"); }
+
+extern "C" GXDrawDoneCallback GXSetDrawDoneCallback(GXDrawDoneCallback callback)
+{
+    // The recorder never completes a draw, so a callback registered here is
+    // never called.  It is swapped and reported, which is enough for a test to
+    // see that the game registered one.
+    static GXDrawDoneCallback current = nullptr;
+    GXDrawDoneCallback previous = current;
+    current = callback;
+    record("GXSetDrawDoneCallback",
+           reinterpret_cast<const void*>(
+               reinterpret_cast<std::uintptr_t>(callback)));
+    return previous;
+}
+
+// ---------------------------------------------------------------------------
+// Display copy -- the path that moves the embedded framebuffer out to the one
+// VI scans.  video.c drives all of it.
+
+// GXSetDispCopyYScale returns a line count derived from the source rectangle,
+// so the two calls are coupled and the source height has to be remembered.
+u16 g_display_copy_source_height = 0;
+
+extern "C" void GXSetDispCopySrc(u16 left, u16 top, u16 width, u16 height)
+{
+    record("GXSetDispCopySrc", left, top, width, height);
+    g_display_copy_source_height = height;
+}
+
+extern "C" void GXSetDispCopyDst(u16 width, u16 height)
+{
+    record("GXSetDispCopyDst", width, height);
+}
+
+extern "C" void GXSetDispCopyGamma(GXGamma gamma)
+{
+    record("GXSetDispCopyGamma", gamma);
+}
+
+extern "C" u32 GXSetDispCopyYScale(f32 scale)
+{
+    record("GXSetDispCopyYScale", scale);
+    // The console answers with the number of lines the copy will produce, and
+    // video.c feeds that straight into GXSetDispCopyDst -- so a wrong answer
+    // here makes the game size its external framebuffer wrongly.  It is the
+    // source rectangle's height scaled, which is why the preceding
+    // GXSetDispCopySrc is remembered.
+    //
+    // Melee only ever passes 1.0 or xfbHeight/efbHeight, both of which are
+    // exact for the 480-line modes it uses.  The console's rounding for other
+    // fractional scales is not sourced here.
+    return static_cast<u32>(static_cast<f32>(g_display_copy_source_height) *
+                            scale);
+}
+
+extern "C" void GXSetCopyClamp(GXFBClamp clamp) { record("GXSetCopyClamp", clamp); }
+
+extern "C" void GXSetCopyClear(GXColor color, u32 z)
+{
+    record("GXSetCopyClear", color, z);
+}
+
+extern "C" void GXSetCopyFilter(GXBool aa, u8 sample_pattern[12][2], GXBool vf,
+                                u8 vfilter[7])
+{
+    // The filter tables are recorded as their contents rather than as
+    // addresses: which kernel a mode uses is the whole content of this call,
+    // and GXNtsc480IntDf's is the one the port supplies rather than sources.
+    std::string line = "GXSetCopyFilter(";
+    line += field(aa);
+    line += ", [";
+    for (int index = 0; index < 12; ++index) {
+        if (index != 0) {
+            line += ' ';
+        }
+        line += sample_pattern == nullptr
+                    ? "-"
+                    : std::to_string(sample_pattern[index][0]) + ":" +
+                          std::to_string(sample_pattern[index][1]);
+    }
+    line += "], ";
+    line += field(vf);
+    line += ", [";
+    for (int index = 0; index < 7; ++index) {
+        if (index != 0) {
+            line += ' ';
+        }
+        line += vfilter == nullptr ? "-" : std::to_string(vfilter[index]);
+    }
+    line += "])";
+    g_trace.push_back(std::move(line));
+}
+
+extern "C" void GXCopyDisp(void* dest, GXBool clear)
+{
+    record("GXCopyDisp", dest, clear);
+}
+
+extern "C" void GXGetProjectionv(f32* values)
+{
+    // video.c reads the projection back to rebuild it after a copy.  The
+    // recorder has no pipeline state, so it answers a zeroed orthographic
+    // projection: seven floats with the type tag first.
+    record("GXGetProjectionv", values);
+    if (values == nullptr) {
+        return;
+    }
+    for (int index = 0; index < 7; ++index) {
+        values[index] = 0.0F;
+    }
+    values[0] = static_cast<f32>(GX_ORTHOGRAPHIC);
+}
+
+extern "C" void GXGetViewportv(f32* values)
+{
+    record("GXGetViewportv", values);
+    if (values == nullptr) {
+        return;
+    }
+    for (int index = 0; index < 6; ++index) {
+        values[index] = 0.0F;
+    }
+}
+
+extern "C" void GXSetFog(GXFogType type, f32 startz, f32 endz, f32 nearz,
+                         f32 farz, GXColor color)
+{
+    record("GXSetFog", type, startz, endz, nearz, farz, color);
+}
+
+extern "C" void GXSetFogRangeAdj(GXBool enable, u16 center,
+                                 GXFogAdjTable* table)
+{
+    record("GXSetFogRangeAdj", enable, center, table);
+}
+
+extern "C" void GXSetTevClampMode(int stage, int mode)
+{
+    record("GXSetTevClampMode", stage, mode);
+}
+
+extern "C" void GXInitFogAdjTable(GXFogAdjTable* table, u16 width,
+                                  f32 projmtx[4][4])
+{
+    // The console builds ten range-adjustment coefficients from the projection
+    // and the viewport width.  The formula is Nintendo's and is not in either
+    // source tree, so this records the call and leaves the table at unity --
+    // a fog whose range is not adjusted across the screen rather than one
+    // adjusted wrongly.  fog.c is the only caller, and it is the reason that
+    // unit could not compile at all before.
+    record("GXInitFogAdjTable", table, width, projmtx);
+    if (table == nullptr) {
+        return;
+    }
+    for (u16& coefficient : table->r) {
+        coefficient = 0x0100;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The render mode Melee asks for.
+//
+// GXNtsc480IntDf is Nintendo's data, declared in the SDK headers and defined
+// in the SDK library -- which is in neither tree.  The port supplies it, and
+// the split between what is sourced and what is not matters:
+//
+//   * the **geometry** is unambiguous NTSC 480i and is what the game actually
+//     computes with.  Counting the reads across the decompilation: efbHeight
+//     twelve times, fbWidth nine, then xfbHeight, viWidth, viHeight,
+//     field_rendering and aa.  cobj.c divides by viWidth and viHeight to scale
+//     a viewport; video.c sizes the framebuffer from fbWidth and xfbHeight.
+//     All of those are 640x480 with no field rendering and no antialiasing;
+//   * the two **filter tables** are read exactly once each, and only to hand
+//     straight to GXSetCopyFilter.  The vertical filter below is the flat
+//     kernel -- 21, 22, 21 over seven taps, summing to 64 -- which is the
+//     unfiltered form.  The deflicker kernel the "Df" in the name refers to is
+//     *not* reproduced here, because its coefficients are not in either tree.
+//     The consequence is a sharper image than the console's, not a wrong one.
+extern "C" GXRenderModeObj GXNtsc480IntDf = {
+    VI_TVMODE_NTSC_INT,
+    640,  // fbWidth
+    480,  // efbHeight
+    480,  // xfbHeight
+    0,    // viXOrigin
+    0,    // viYOrigin
+    640,  // viWidth
+    480,  // viHeight
+    VI_XFBMODE_DF,
+    0, // field_rendering
+    0, // aa
+    // sample_pattern: unused while aa is 0, and centred when it is read.
+    { { 6, 6 }, { 6, 6 }, { 6, 6 }, { 6, 6 }, { 6, 6 }, { 6, 6 },
+      { 6, 6 }, { 6, 6 }, { 6, 6 }, { 6, 6 }, { 6, 6 }, { 6, 6 } },
+    // vfilter: the flat kernel, summing to 64.  See the note above.
+    { 0, 0, 21, 22, 21, 0, 0 },
+};

@@ -8,11 +8,13 @@
 // that advances exactly, alarms that fire at their own instant, and critical
 // sections that really do hold a handler off.
 
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include <melee/port/dolphin_compat.h>
 
+#include "gx_record.hpp"
 #include "os_scheduler.hpp"
 
 namespace os = meleeboard::os;
@@ -295,4 +297,155 @@ MELEE_TEST(UpstreamScheduler, ProducesTheSameSequenceEveryRun)
     const std::vector<std::string> second = run();
     REQUIRE(!first.empty());
     CHECK(first == second);
+}
+
+// ---------------------------------------------------------------------------
+// The video interface, bridged onto the scheduler.
+
+extern "C" {
+#include <sysdolphin/baselib/video.h>
+}
+
+#include "vi_bridge.hpp"
+
+namespace vi = meleeboard::vi;
+
+namespace {
+
+std::vector<std::string>* g_vi_log = nullptr;
+
+void note_pre(u32 count)
+{
+    if (g_vi_log != nullptr) {
+        g_vi_log->push_back("pre#" + std::to_string(count));
+    }
+}
+void note_post(u32 count)
+{
+    if (g_vi_log != nullptr) {
+        g_vi_log->push_back("post#" + std::to_string(count));
+    }
+}
+
+} // namespace
+
+MELEE_TEST(UpstreamVI, DeliversRetraceInPreThenPostOrderOncePerField)
+{
+    std::vector<std::string> log;
+    g_vi_log = &log;
+    os::reset();
+    VIInit();
+
+    CHECK(VISetPreRetraceCallback(note_pre) == nullptr);
+    CHECK(VISetPostRetraceCallback(note_post) == nullptr);
+
+    VIWaitForRetrace();
+    VIWaitForRetrace();
+
+    REQUIRE_EQ(log.size(), std::size_t(4));
+    CHECK_EQ(log[0], std::string("pre#1"));
+    CHECK_EQ(log[1], std::string("post#1"));
+    CHECK_EQ(log[2], std::string("pre#2"));
+    CHECK_EQ(log[3], std::string("post#2"));
+
+    // Two fields of the timebase have passed, exactly.
+    CHECK_EQ(OSGetTime(), OSTime(2) * os::kTicksPerFrame);
+    CHECK_EQ(VIGetRetraceCount(), 2U);
+
+    // Swapping a callback returns the previous one, which is how video.c and
+    // lb_0195.c hand them back and forth.
+    CHECK(VISetPreRetraceCallback(nullptr) == note_pre);
+    g_vi_log = nullptr;
+}
+
+MELEE_TEST(UpstreamVI, HoldsRetraceOffInsideACriticalSection)
+{
+    // video.c masks interrupts to swap the retrace callback pointers.  That
+    // critical section has to hold the handler off, or the handler could run
+    // against a half-written pointer -- which is the reason retrace goes
+    // through the scheduler rather than being called directly.
+    std::vector<std::string> log;
+    g_vi_log = &log;
+    os::reset();
+    VIInit();
+    VISetPreRetraceCallback(note_pre);
+    VISetPostRetraceCallback(note_post);
+
+    const BOOL level = OSDisableInterrupts();
+    VIWaitForRetrace();
+    CHECK_EQ(log.size(), std::size_t(0));
+    CHECK_EQ(os::deferred_callbacks(), std::size_t(2));
+
+    OSRestoreInterrupts(level);
+    REQUIRE_EQ(log.size(), std::size_t(2));
+    CHECK_EQ(log[0], std::string("pre#1"));
+    CHECK_EQ(log[1], std::string("post#1"));
+    g_vi_log = nullptr;
+}
+
+MELEE_TEST(UpstreamVI, LatchesTheFrameBufferAtTheFieldBoundary)
+{
+    // The console latches VI's registers at the start of a field, which is why
+    // the game can name the next framebuffer mid-frame without tearing.
+    os::reset();
+    VIInit();
+
+    int first = 0;
+    int second = 0;
+    VISetNextFrameBuffer(&first);
+    CHECK(vi::pending_frame_buffer() == &first);
+    CHECK(vi::current_frame_buffer() == nullptr);
+
+    VIWaitForRetrace();
+    CHECK(vi::current_frame_buffer() == &first);
+
+    // Named again mid-frame, it does not take effect until the next field...
+    VISetNextFrameBuffer(&second);
+    CHECK(vi::current_frame_buffer() == &first);
+    // ...unless the game flushes, which is what VIFlush is for.
+    VIFlush();
+    CHECK(vi::current_frame_buffer() == &second);
+}
+
+MELEE_TEST(UpstreamVI, RunsUpstreamsOwnVideoLayerAcrossAField)
+{
+    // The point of the bridge.  HSD_VIInit is upstream's code: it configures
+    // the mode, registers its own pre- and post-retrace callbacks, registers a
+    // draw-done callback, and sets up the external framebuffers.  Then a field
+    // passes and its callbacks run.
+    os::reset();
+    VIInit();
+    meleeboard::test::gx::reset();
+
+    // Two external framebuffers, as gmmain.c allocates.
+    alignas(32) static u8 xfb0[64] = {};
+    alignas(32) static u8 xfb1[64] = {};
+
+    HSD_VIStatus status{};
+    std::memset(&status, 0, sizeof status);
+    status.rmode = GXNtsc480IntDf;
+    status.black = 0;
+
+    HSD_VIInit(&status, xfb0, xfb1, nullptr);
+
+    // Upstream took the callbacks, which is why the bridge had to return the
+    // previous one rather than ignore it.
+    CHECK(vi::retrace_count() == 0U);
+
+    // The render mode it configured is the one the port supplies, with the
+    // geometry the game computes from.
+    CHECK_EQ(HSD_VIGetNbXFB(), 2);
+    GXRenderModeObj* mode = HSD_VIGetRenderMode();
+    REQUIRE(mode != nullptr);
+    CHECK_EQ(mode->fbWidth, static_cast<u16>(640));
+    CHECK_EQ(mode->efbHeight, static_cast<u16>(480));
+    CHECK_EQ(mode->viHeight, static_cast<u16>(480));
+
+    // A field passes, and upstream's own retrace callbacks run.
+    VIWaitForRetrace();
+    CHECK_EQ(VIGetRetraceCount(), 1U);
+    CHECK_EQ(OSGetTime(), os::kTicksPerFrame);
+
+    // The display-copy path is upstream's too, and it reached GX.
+    CHECK(meleeboard::test::gx::count("GXSetDrawDoneCallback") >= 1U);
 }

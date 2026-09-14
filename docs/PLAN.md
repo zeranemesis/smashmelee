@@ -76,29 +76,42 @@ The single most useful measurement of this session, for planning purposes:
 
 ```
 tools/upstream_native_spike.py extern/melee --only melee --aurora-headers
-→ 850 / 908 game translation units parse against Aurora's headers (93.6%)
+→ 866 / 908 game translation units parse against Aurora's headers (95.4%)
 ```
 
-And the 58 that do not are not a wall — they are a named list:
+That number was 850 an hour earlier, and the 16 it gained were not work — they
+were a **measurement error this plan was repeating**. The spike tool carried
+its own transcription of the build's prelude, and it had drifted: the build had
+grown `_USE_MATH_DEFINES`, the `M_PI` fallbacks, the GX umbrella include, the
+`GXSetArray` adapter and a dozen SDK spellings the tool never learned. It was
+measuring a configuration nobody builds. It now force-includes the real
+prelude, so there is one copy and the number means what it says.
+
+The 42 that remain are a named list, and most of them are not blockers:
 
 | Cause | Count | What it means |
 |---|---|---|
-| GameCube struct layout asserted | 32 | Not a blocker but the **inventory**: these are the `ASSERT_SIZE` lines that fail because a pointer is 8 bytes here. Each names a structure that needs converting. |
-| `PAD_*` button constants absent | 12 | Aurora's `pad.h` omits them. Header work, hours not weeks. |
-| Declaration stricter than MWCC accepts | 7 | Prototype mismatches upstream's compiler tolerated. |
-| `GXSetTevClampMode`, `PADSetSamplingRate`, `CARDFormatAsync` | 6 | Three of the named absent SDK symbols. |
-| `OSContext::fpscr`, one arity | 2 | Aurora's `OSContext` lacks a field the debugger path reads. |
+| GameCube struct layout asserted | 32 | Not a blocker but the **inventory**: these are the `ASSERT_SIZE` lines that fail because a pointer is 8 bytes here. Each names a structure that needs converting, which is phase 2's work. |
+| Declaration stricter than MWCC accepts | 8 | Prototype mismatches upstream's compiler tolerated. |
+| `OSContext::fpscr` | 1 | Read by `debugconsole_main.c` alone, which does not ship. |
+| One call arity | 1 | |
 
-**Only one of the 58 is in `melee/ft`** — the fighters, 441 files and 145,000
-lines, the largest subsystem in the game. The fighter code is essentially
-ready to compile. The failures cluster in `melee/gm` (27, the game manager and
-scene table) and `melee/gr` (9, stages).
+So the genuine remaining blockers number **ten**, and 32 of the 42 are a
+to-do list phase 2 already has a mechanism for.
+
+**Not one of the 42 is in `melee/ft`** — the fighters, 441 files and 145,000
+lines, the largest subsystem in the game, now parse in full. The failures
+cluster in `melee/gm` (19, the game manager and scene table) and `melee/gr`
+(9, stages).
 
 So the remaining work is not "compile the game". It is three things:
 
 1. **Convert the rest of the on-disc structures.** Twenty done, roughly
    fifteen to go for the engine, plus whatever the 32 asserting units name.
-2. **Fill the SDK gaps.** Small and named everywhere except audio.
+2. **Fill the SDK gaps.** Done for everything named except audio — and none of
+   it had to be invented: every spelling came from upstream's own bundled SDK
+   headers, which sit behind Aurora's on the include path and were shadowed
+   rather than missing.
 3. **Make it run** — boot order, the frame loop, and the scene flow.
 
 ### The one genuinely unmeasured gap: audio
@@ -230,11 +243,64 @@ produce the same handler calls at the same timebase values.
 appears — a blocking DVD read the game expects to yield on — it is there, and
 the decision can be revisited against a concrete case rather than a guess.
 
+### The absent symbols · **supplied, and none of them invented**
+
+All five, plus the `PAD_*` aliases and two more the game needed, turned out to
+be **sourceable from upstream's own bundled SDK headers** under
+`extern/melee/extern/dolphin/include` — which sit *last* on the include path,
+behind Aurora's, so the declarations were shadowed rather than missing. The
+prelude states them with a comment naming where each came from.
+
+`GXNtsc480IntDf` is the one exception, because it is Nintendo's *data* rather
+than a declaration, and the split matters:
+
+- the **geometry** is unambiguous NTSC 480i, and is what the game computes
+  with — `efbHeight` read twelve times across the decompilation, `fbWidth`
+  nine, then `xfbHeight`, `viWidth`, `viHeight`, `field_rendering` and `aa`.
+  All 640×480, no field rendering, no antialiasing;
+- the two **filter tables** are read exactly once each, only to hand straight
+  to `GXSetCopyFilter`. The vertical filter the port supplies is the flat
+  kernel (21, 22, 21 over seven taps, summing to 64). The deflicker kernel the
+  `Df` in the name refers to is **not** reproduced, because its coefficients
+  are in neither tree. The consequence is a sharper image than the console's,
+  not a wrong one.
+
+`fog` and `video` compile and link on the back of that, which leaves **two**
+units outside the conformance target rather than four: `psdisp`, which asserts
+a pointer-holding structure is eight bytes, and `debug`, which is written
+against the Metrowerks libc's `FILE`. `OSContext::fpscr` turned out to matter
+to exactly one unit — `debugconsole_main.c`, which does not ship.
+
+### VI, and the frame boundary · **bridged**
+
+`src/melee_port/upstream/vi_bridge.cpp` supplies the ten `VI` entry points
+`video.c` needs, and the shape of it is the threading finding paying off.
+
+`VIWaitForRetrace()` is the blocking wait a threaded port would have needed a
+coroutine for. Melee calls it inside loops that spin until a framebuffer frees
+up:
+
+```c
+while ((idx = HSD_VIGetXFBDrawEnable()) == -1) { VIWaitForRetrace(); }
+```
+
+With no other thread to yield to, that wait is not a yield — it is the step
+that moves the world forward. So it advances the timebase by one exact field,
+fires every alarm that comes due inside it, and then delivers the retrace.
+**The game's own main loop is the frame pump**, which is the arrangement the
+console had.
+
+Retrace goes through the scheduler rather than being called directly, because
+retrace *is* an interrupt: `video.c` masks interrupts to swap the callback
+pointers, and that critical section has to hold the handler off. It does, and
+there is a test for it. Upstream's own `HSD_VIInit` now runs — it configures
+the mode, registers its callbacks and its draw-done callback, sets up two
+external framebuffers — and a field passes with its callbacks firing.
+
 ### What remains for this phase
 
-- the five absent symbols above;
-- `VI`'s retrace callbacks, bridged onto Aurora's swapchain and the 60 Hz
-  clock — the scheduler is where they will be delivered;
+- the `OS` arena and heap, which `initialize.c` reaches for — the last thing
+  between the conformance target and upstream's own `HSD_InitComponent`;
 - the `DC`/`IC` cache operations, which are no-ops on a coherent host;
 - ~~`GXSetArray`'s two extra arguments.~~ **Done.** The adapter is in the
   prelude, and `src/melee_port/upstream/gx_array_registry.cpp` answers both
@@ -697,16 +763,13 @@ ever. A legally obtained disc image is a runtime input.
 Phase 0 is done, most of phase 1 is done, and phase 2's mechanism is built.
 These are what follow, in order.
 
-1. **Bridge `VI`'s retrace callbacks onto the scheduler** (phase 1). The other
-   half of the callback boundary. A frame loop cannot run without it, and
-   everything from phase 3 on is a frame loop.
-2. **Add the named SDK gaps** (phase 1) — the `PAD_*` button constants (12
-   units), `GXSetTevClampMode` (4), `PADSetSamplingRate`, `CARDFormatAsync`,
-   `GXInitFogAdjTable`, `GXNtsc480IntDf`, `GXWaitDrawDone`, and
-   `OSContext::fpscr`. Every one is named, none is deep, and together they
-   clear 26 of the 58 failing game units.
-3. **Convert `HSD_Spline` and the particle list** (phase 2) — the last two
+1. **Bring `initialize.c` over** (phase 1) — the `OS` arena and heap surface it
+   reaches for is the last thing between the conformance target and upstream's
+   own `HSD_InitComponent`, which is what phase 3 has to call.
+2. **Convert `HSD_Spline` and the particle list** (phase 2) — the last two
    things `unconverted()` reports, after which a whole archive converts.
+3. **Re-run the game-wide syntax check** and confirm the 26 units the new
+   declarations should have cleared actually cleared.
 4. **Load `MnMaAll.dat` from the disc and draw it with upstream's renderer**
    (phase 3). Everything it needs now exists: the archive reader, the
    converters, the scene graph, the camera, and the recorder to compare

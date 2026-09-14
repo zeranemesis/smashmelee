@@ -88,6 +88,50 @@ typedef enum _GXTevClampMode {
 } GXTevClampMode;
 #endif
 
+// The SDK spellings Aurora's headers do not carry.
+//
+// Every one of these is taken from upstream's own bundled SDK headers under
+// extern/melee/extern/dolphin/include -- which sit *last* on the include path,
+// behind Aurora's, so the declarations there are shadowed rather than absent.
+// Nothing here is invented; each line names where it came from.
+
+// dolphin/pad.h.  Melee's semantic button aliases live above the hardware bits
+// in a 64-bit mask, which is why they are ULL.
+#ifndef PAD_CONFIRM
+#define PAD_STICK_UP (1 << 16)
+#define PAD_STICK_DOWN (1 << 17)
+#define PAD_STICK_LEFT (1 << 18)
+#define PAD_STICK_RIGHT (1 << 19)
+#define PAD_CONFIRM (1ULL << 32)
+#define PAD_CANCEL (1ULL << 33)
+#define PAD_LR_START (1ULL << 34)
+#define PAD_LRA_START (1ULL << 35)
+#define PAD_ANY_UP (1ULL << 36)
+#define PAD_ANY_DOWN (1ULL << 37)
+#define PAD_ANY_LEFT (1ULL << 38)
+#define PAD_ANY_RIGHT (1ULL << 39)
+#endif
+
+// dolphin/vi.h.  A macro there, not a function -- the framebuffer width is
+// rounded up to a multiple of sixteen.
+#ifndef VIPadFrameBufferWidth
+#define VIPadFrameBufferWidth(width) ((u16) (((u16) (width) + 15) & ~15))
+#endif
+
+// A redundant declaration is legal C, so these are safe to state even if
+// Aurora grows them later.  dolphin/pad.h, gx/GXTev.h and gx/GXManage.h
+// respectively.  The linkage is spelled out because this header reaches C++
+// as well, and the definitions are all in C or extern "C".
+#ifdef __cplusplus
+extern "C" {
+#endif
+void PADSetSamplingRate(unsigned long msec);
+void GXSetTevClampMode(int stage, int mode);
+void GXWaitDrawDone(void);
+#ifdef __cplusplus
+}
+#endif
+
 // GX comes in whole, and through the umbrella header: several of Aurora's GX
 // headers name enums they do not include the declaration of, and only
 // <dolphin/gx.h> puts them in the right order.  It is here, rather than left
@@ -95,6 +139,24 @@ typedef enum _GXTevClampMode {
 // after Aurora's declaration of GXSetArray has been parsed -- a function-like
 // macro would otherwise be applied to the declaration itself.
 #include <dolphin/gx.h>
+#include <dolphin/card.h>
+
+// gx/GXPixel.h and gx/GXFrameBuffer.h.  Aurora already carries GXFogAdjTable
+// and GXSetFogRangeAdj; only the table's initializer is missing.  The render
+// mode objects it declares none of -- they are Nintendo's data, and the port
+// supplies the one Melee names (see gx_record.cpp for what is and is not
+// sourced about it).
+#ifdef __cplusplus
+extern "C" {
+#endif
+void GXInitFogAdjTable(GXFogAdjTable* table, u16 width, f32 projmtx[4][4]);
+extern GXRenderModeObj GXNtsc480IntDf;
+
+// dolphin/card.h.
+s32 CARDFormatAsync(s32 chan, CARDCallback callback);
+#ifdef __cplusplus
+}
+#endif
 
 // Upstream calls GXSetArray with the three arguments the GameCube took.
 // Aurora's takes five: it writes a 64-bit base pointer into the command
@@ -102,11 +164,17 @@ typedef enum _GXTevClampMode {
 // it needs the length in bytes and the byte order as well.  The console
 // needed neither -- the GPU read the array where it lay, big-endian.
 //
-// Aurora offers GXSETARRAY() as the spelling that works on both, and
-// upstream's own SDK header defines it too, so the two call sites in pobj.c
-// are an upstream oversight rather than a disagreement.  Until they change,
-// this maps three arguments onto five.  Within the replacement list the name
-// is not expanded again, so GXSetArray below is Aurora's function.
+// Aurora offers GXSETARRAY() as the spelling that works on both, and upstream
+// uses it -- lbcollision.c and psdisp.c both call the five-argument macro
+// correctly.  pobj.c's two call sites are the outlier, not the rule.  So this
+// adapts those two, and must leave GXSETARRAY's own expansion alone: that
+// macro expands to a five-argument GXSetArray, which the adapter below would
+// otherwise swallow.  Wrapping the name in parentheses is what stops it -- a
+// function-like macro is only expanded when its name is followed by "(", so
+// (GXSetArray)(...) reaches the real function.
+//
+// Within the adapter's own replacement list the name is likewise not expanded
+// again, so GXSetArray there is Aurora's function too.
 //
 // The two arguments the call site cannot supply are asked of the port rather
 // than invented: HSD never records how long a vertex array is, and whether
@@ -128,6 +196,9 @@ bool melee_gx_array_is_little_endian(const void* base);
 #define GXSetArray(attr, base, stride)                                         \
     GXSetArray((attr), (base), melee_gx_array_extent(base), (stride),          \
                melee_gx_array_is_little_endian(base))
+#undef GXSETARRAY
+#define GXSETARRAY(attr, data, size, stride, le)                               \
+    (GXSetArray)((attr), (data), (size), (stride), (le))
 #endif
 
 #endif // MELEE_PORT_DOLPHIN_COMPAT_H

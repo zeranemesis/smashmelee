@@ -20,10 +20,14 @@ bool g_interrupts_enabled = true;
 // so the queue holds pointers, never copies.
 std::vector<OSAlarm*> g_armed;
 
-// Handlers whose alarm came due while interrupts were masked.
+// Handlers whose interrupt arrived while interrupts were masked.  An entry is
+// either an alarm (handler plus its alarm) or a plain interrupt (a function
+// taking one word, which is what VI's retrace callbacks are).
 struct Deferred {
     OSAlarm* alarm;
     OSAlarmHandler handler;
+    void (*plain)(u32);
+    u32 argument;
 };
 std::vector<Deferred> g_deferred;
 
@@ -78,6 +82,8 @@ void drain_deferred()
         const Deferred entry = g_deferred[index];
         if (entry.handler != nullptr) {
             entry.handler(entry.alarm, nullptr);
+        } else if (entry.plain != nullptr) {
+            entry.plain(entry.argument);
         }
     }
     g_deferred.clear();
@@ -91,13 +97,25 @@ void deliver(OSAlarm* alarm, OSAlarmHandler handler)
         return;
     }
     if (!g_interrupts_enabled) {
-        g_deferred.push_back(Deferred{ alarm, handler });
+        g_deferred.push_back(Deferred{ alarm, handler, nullptr, 0 });
         return;
     }
     handler(alarm, nullptr);
 }
 
 } // namespace
+
+void deliver_as_interrupt(void (*handler)(u32), u32 argument)
+{
+    if (handler == nullptr) {
+        return;
+    }
+    if (!g_interrupts_enabled) {
+        g_deferred.push_back(Deferred{ nullptr, nullptr, handler, argument });
+        return;
+    }
+    handler(argument);
+}
 
 void reset()
 {
