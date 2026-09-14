@@ -179,3 +179,53 @@ MELEE_TEST(UpstreamIDTable, ResolvesCollidingIdentifiers)
     CHECK(HSD_IDGetData(143, &found) == &second);
     CHECK_EQ(found, 1);
 }
+
+MELEE_TEST(UpstreamIDTable, CannotTellApartTwoPointersSharingALowWord)
+{
+    // Why the descriptor address is the wrong key on a 64-bit host.
+    //
+    // HSD_JObjLoadJoint registers a joint with HSD_IDInsertToTable(NULL,
+    // (u32) joint, jobj), and five places look one back up the same way --
+    // jobj.c for a child, pobj.c for a rigid primitive's joint and for each
+    // envelope weight, robj.c for a constraint's target and for an rvalue.
+    // The key is the low word of a host pointer.
+    //
+    // Two descriptors whose addresses differ only above bit 31 therefore
+    // share a key, and the table answers with whichever was registered.  The
+    // symptom would not be a crash: it would be a constraint or a skinning
+    // weight quietly following the wrong bone.
+    //
+    // The two values below are never dereferenced.  They stand for two host
+    // allocations four gigabytes apart, which is what a long-lived process
+    // with a spread-out heap eventually produces.
+    const auto first = reinterpret_cast<void*>(std::uintptr_t{ 0x0000000100002000ULL });
+    const auto second = reinterpret_cast<void*>(std::uintptr_t{ 0x0000000200002000ULL });
+    REQUIRE(first != second);
+
+    int first_object = 1;
+    int second_object = 2;
+
+    HSD_IDInsertToTable(nullptr, static_cast<u32>(
+                                     reinterpret_cast<std::uintptr_t>(first)),
+                        &first_object);
+
+    // Looking up the *second* descriptor finds the first one's object.
+    s32 found = 0;
+    void* answer = HSD_IDGetDataFromTable(
+        nullptr, static_cast<u32>(reinterpret_cast<std::uintptr_t>(second)),
+        &found);
+    CHECK_EQ(found, 1);
+    CHECK(answer == &first_object);
+    CHECK(answer != &second_object);
+
+    // And registering the second silently replaces the first, so the tree
+    // that was already built now resolves to the newcomer.
+    HSD_IDInsertToTable(nullptr,
+                        static_cast<u32>(
+                            reinterpret_cast<std::uintptr_t>(second)),
+                        &second_object);
+    answer = HSD_IDGetDataFromTable(
+        nullptr, static_cast<u32>(reinterpret_cast<std::uintptr_t>(first)),
+        nullptr);
+    CHECK(answer == &second_object);
+}

@@ -22,6 +22,8 @@
 #include <melee/port/dolphin_compat.h>
 #include <melee/sysdolphin/baselib/archive.hpp>
 
+#include "descriptor_arena.hpp"
+
 extern "C" {
 #include <sysdolphin/baselib/dobj.h>
 #include <sysdolphin/baselib/jobj.h>
@@ -51,7 +53,15 @@ struct UnconvertedReference {
 // have to be.
 class ArchiveConverter {
 public:
-    explicit ArchiveConverter(const Archive& archive) : archive_(archive) {}
+    // `joint_arena_bytes` sizes the block joint descriptors come from; see
+    // descriptor_arena.hpp for why that block is one allocation and why its
+    // size matters.  The default holds far more joints than an archive does.
+    explicit ArchiveConverter(
+        const Archive& archive,
+        std::size_t joint_arena_bytes = DescriptorArena::kDefaultCapacity)
+        : archive_(archive), joint_arena_(joint_arena_bytes)
+    {
+    }
 
     ArchiveConverter(const ArchiveConverter&) = delete;
     ArchiveConverter& operator=(const ArchiveConverter&) = delete;
@@ -84,7 +94,12 @@ public:
         return unconverted_;
     }
 
-    std::size_t joint_count() const { return joints_.size(); }
+    std::size_t joint_count() const { return joints_by_offset_.size(); }
+
+    // Where the joint descriptors live.  Their addresses become ID-table
+    // keys truncated to 32 bits, so they need storage whose low words are
+    // distinct; see descriptor_arena.hpp.
+    const DescriptorArena& joint_arena() const { return joint_arena_; }
     std::size_t display_object_count() const { return display_objects_.size(); }
     std::size_t primitive_count() const { return primitives_.size(); }
     std::size_t texture_count() const { return textures_.size(); }
@@ -145,9 +160,9 @@ private:
     };
 
     const Archive& archive_;
+    DescriptorArena joint_arena_;
     // Deques, because every address handed out has to stay put: the graph
     // points into this storage while it is still being built.
-    std::deque<HSD_Joint> joints_;
     std::deque<HSD_DObjDesc> display_objects_;
     std::deque<HSD_MObjDesc> material_objects_;
     std::deque<HSD_PObjDesc> primitives_;

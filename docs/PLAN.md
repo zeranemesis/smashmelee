@@ -225,6 +225,20 @@ So `src/melee_port/upstream/archive_convert.cpp` reads through `Archive`,
 which carries the relocation table and answers `kNullOffset` for a field the
 table does not name. The bounds checks come along for free.
 
+**The ID-table truncation is fixed, and the fix is worth stating.** Upstream
+keys its ID table on `(u32) joint` — the low word of a joint descriptor's
+address. On a 64-bit host two descriptors four gigabytes apart share a key,
+and the table answers with whichever was registered last: not a crash, but a
+constraint or a skinning weight quietly following the wrong bone.
+`tests/hsd/test_upstream_core.cpp` demonstrates it with two fabricated
+addresses. The port cannot change the key without changing upstream, so it
+changes where joints live: one allocation whose size is a power of two and
+whose base is aligned to that size cannot straddle a boundary its own size, so
+every low word in it is distinct. One allocation, not a chain — two separately
+aligned blocks could collide with each other, so running out is a refusal with
+a reason. `HSD_Joint` is the only structure that needs this; it is the only
+one whose address upstream ever truncates.
+
 **Twenty structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
 `HSD_MObjDesc`, `HSD_Material`, `HSD_PEDesc`, `HSD_PObjDesc`,
 `HSD_VtxDescList`, `HSD_ShapeSetDesc`, `HSD_EnvelopeDesc`, `HSD_TObjDesc`,
@@ -330,7 +344,7 @@ depends on there are 16, in 6 units**, and they fall into three patterns:
 
 | Pattern | Sites | What it is |
 |---|---|---|
-| ID-table keys | 9 (`jobj`, `pobj`, `robj`, `aobj`) | HSD stores a descriptor's **address** as the hash key for the runtime object built from it — `HSD_IDInsertToTable(NULL, (u32) joint, jobj)`. Key on the archive offset instead, which the port already carries and which cannot collide within an archive. |
+| ID-table keys | 9 (`jobj`, `pobj`, `robj`, `aobj`) | **Resolved, and not the way this table first proposed.** HSD stores a joint descriptor's **address** as the hash key — `HSD_IDInsertToTable(NULL, (u32) joint, jobj)` — and five places look one back up the same way. Changing the key would mean changing upstream. Changing where the descriptors live does not: `src/melee_port/upstream/descriptor_arena.cpp` allocates them from one block whose size is a power of two and whose base is aligned to that size, and such a block cannot straddle a boundary its own size — so the low word of every address in it is distinct by construction. |
 | `GXSetArray` arity | 2 (`pobj`) | **Resolved.** Aurora's `TARGET_PC` form takes the array's byte length and its byte order too, because it writes a 64-bit base into the command stream and the backend copies the array out rather than reading it where it lies. `include/melee/port/dolphin_compat.h` maps the console's three arguments onto Aurora's five; the two the call site cannot supply are asked of `melee_gx_array_extent()` and `melee_gx_array_is_little_endian()`, which is where phase 3 owes a real answer. |
 | In-place relocation | 1 (`archive`) | `Locate()`'s `*ptr += (u32) archive->data`. This is the one the `*32b` converters replace. |
 | Pool arena | 7 (`objalloc`) | Avoided entirely by leaving `HSD_ObjSetHeap` unset, as phase 0 found. |
@@ -546,13 +560,8 @@ surface exists, and with it the whole scene-object layer.
 
 1. Decide the threading model and write it down (phase 1). Everything above
    phase 1 inherits it, and it is the only remaining design decision.
-2. Key the HSD ID table on archive offsets rather than descriptor addresses
-   (phase 2). This stopped being a tidiness question: `HSD_RObjResolveRefs`
-   looks a joint up with `HSD_IDGetData((u32) desc->u.joint, NULL)`, and on a
-   64-bit host that truncates a heap address to its low word. Two descriptors
-   whose host addresses differ only above bit 31 would collide, and the
-   failure would be a constraint silently following the wrong bone. Nine of
-   the fourteen remaining pointer casts are this one pattern.
+2. Convert `HSD_Spline` and the particle `HSD_SList` — the last two things
+   `unconverted()` reports, and the last of a joint's three union forms.
 3. Key the HSD ID table on archive offsets rather than descriptor addresses
    (phase 2) — nine of the fourteen remaining pointer casts, and the port's
    `id` unit already uses 32-bit keys, so this is a decision more than a

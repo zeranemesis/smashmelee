@@ -1259,9 +1259,13 @@ HSD_Joint* ArchiveConverter::convert_joint_graph(uint32_t offset)
             return nullptr;
         }
 
-        joints_.emplace_back();
-        HSD_Joint& host = joints_.back();
-        std::memset(&host, 0, sizeof host);
+        HSD_Joint* allocated = joint_arena_.allocate_one<HSD_Joint>();
+        if (allocated == nullptr) {
+            error_ = "more joints than the descriptor arena holds (" +
+                     std::to_string(joint_arena_.capacity()) + " bytes)";
+            return nullptr;
+        }
+        HSD_Joint& host = *allocated;
         host.flags = *flags;
         // Registered before its fields are filled in, and the reference
         // stays valid however much the deques grow, so anything the

@@ -194,6 +194,15 @@ order.
       generated texture coordinate.  Pixels and palette entries stay in the
       archive, in the console's tiled layout, because Aurora's GX reads those
       formats natively;
+- [x] fix the ID-table truncation.  Upstream keys its table on `(u32) joint`,
+      the low word of a descriptor's address, and five places look one up that
+      way — so on a 64-bit host two joints four gigabytes apart are one key,
+      and a constraint or a skinning weight quietly follows the wrong bone.
+      There is a test that demonstrates the collision directly.  The key
+      cannot change without changing upstream, so the storage changed instead:
+      joints come from one allocation whose size is a power of two and whose
+      base is aligned to that size, which cannot straddle a boundary its own
+      size, so every low word in it is distinct by construction;
 - [x] convert what a primitive's union holds, in all three of its forms — a
       joint for a rigid primitive, an `HSD_ShapeSetDesc` for a morph target,
       and a table of `HSD_EnvelopeDesc` for a skinned one.  The envelope path

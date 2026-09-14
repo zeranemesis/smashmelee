@@ -10,6 +10,7 @@
 // given to upstream's HSD_JObjLoadJoint.  What comes back is upstream's own
 // joint tree, built from bytes in the shape the disc stores them.
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -1167,4 +1168,68 @@ MELEE_TEST(UpstreamConvert, BuildsAMorphTargetsShapeSet)
     // pointing at a table of nothing.
     CHECK(shapes->normal_desc == nullptr);
     CHECK(shapes->normal_idx_list == nullptr);
+}
+
+MELEE_TEST(UpstreamConvert, GivesEveryJointADistinctLowWord)
+{
+    // The fix for the collision tests/hsd/test_upstream_core.cpp demonstrates.
+    // Upstream keys its ID table on `(u32) joint`, so two joint descriptors
+    // whose host addresses differ only above bit 31 would be one key.  The
+    // converter allocates joints from a single block whose size is a power of
+    // two and whose base is aligned to that size: such a block cannot straddle
+    // a boundary its own size, so the low word rises monotonically across it
+    // and no two addresses in it share one.
+    DatBuilder builder;
+    std::vector<uint32_t> offsets;
+    uint32_t previous = 0;
+    for (int index = 0; index < 256; ++index) {
+        const uint32_t joint =
+            add_joint(builder, static_cast<float>(index), 0.0F, 0.0F);
+        if (index != 0) {
+            builder.pointer(previous + 0x08, joint);
+        }
+        previous = joint;
+        offsets.push_back(joint);
+    }
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(offsets.front());
+    REQUIRE(host != nullptr);
+    CHECK_EQ(converter.joint_count(), std::size_t(256));
+
+    // The arena's own invariant, checked rather than assumed.
+    CHECK(converter.joint_arena().low_words_are_distinct());
+
+    // And the invariant it exists for, checked on the joints themselves.
+    std::vector<u32> keys;
+    for (HSD_Joint* joint = host; joint != nullptr; joint = joint->child) {
+        keys.push_back(
+            static_cast<u32>(reinterpret_cast<std::uintptr_t>(joint)));
+    }
+    REQUIRE_EQ(keys.size(), std::size_t(256));
+    std::sort(keys.begin(), keys.end());
+    CHECK(std::adjacent_find(keys.begin(), keys.end()) == keys.end());
+}
+
+MELEE_TEST(UpstreamConvert, RefusesMoreJointsThanTheArenaHolds)
+{
+    // The arena is one allocation on purpose -- two separately aligned blocks
+    // could collide with each other in their low words, which is the very
+    // thing this prevents.  So running out is a refusal with a reason, not a
+    // second block.
+    DatBuilder builder;
+    const uint32_t first = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    const uint32_t second = add_joint(builder, 1.0F, 0.0F, 0.0F);
+    builder.pointer(first + 0x08, second);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    // One joint's worth of arena, so the second has nowhere to go.
+    ArchiveConverter converter(archive, sizeof(HSD_Joint));
+    CHECK(converter.joint(first) == nullptr);
+    CHECK(converter.error().find("descriptor arena") != std::string::npos);
 }
