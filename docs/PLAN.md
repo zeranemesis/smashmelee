@@ -60,7 +60,7 @@ reimplemented. The rest of the sequencing still holds.
   `HSD_InitComponent` — `gmmain.c`'s own lines — carve two framebuffers, a
   graphics fifo and two heaps out of a 24 MiB arena and emit the console's
   26-call opening GX sequence, held as a golden trace.
-- **Twenty-two on-disc structures convert** from the console's layout into
+- **Twenty-six on-disc structures convert** from the console's layout into
   host-sized ones, and a converted model draws through upstream's own display
   path — a recorded GX frame, asserted.
 - **The SDK callback boundary is decided and implemented**: one thread, an
@@ -110,7 +110,7 @@ cluster in `melee/gm` (19, the game manager and scene table) and `melee/gr`
 
 So the remaining work is not "compile the game". It is three things:
 
-1. **Convert the rest of the on-disc structures.** Twenty-two done, roughly
+1. **Convert the rest of the on-disc structures.** Twenty-six done, roughly
    fifteen to go for the engine, plus whatever the 32 asserting units name.
 2. **Fill the SDK gaps.** Done for everything named except audio — and none of
    it had to be invented: every spelling came from upstream's own bundled SDK
@@ -471,14 +471,15 @@ aligned blocks could collide with each other, so running out is a refusal with
 a reason. `HSD_Joint` is the only structure that needs this; it is the only
 one whose address upstream ever truncates.
 
-**Twenty-two structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
+**Twenty-six structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
 `HSD_MObjDesc`, `HSD_Material`, `HSD_PEDesc`, `HSD_PObjDesc`,
 `HSD_VtxDescList`, `HSD_ShapeSetDesc`, `HSD_EnvelopeDesc`, `HSD_TObjDesc`,
 `HSD_ImageDesc`, `HSD_TlutDesc`, `HSD_TexLODDesc`, `HSD_TObjTevDesc`,
 `HSD_RObjDesc`, `HSD_IKHintDesc`, `HSD_ExpDesc`, `HSD_ByteCodeExpDesc`,
-`HSD_RvalueList`, `HSD_Spline` and the particle `HSD_SList` — a whole
-textured, skinned, constrained model, and both of the non-geometry things a
-joint's union can hold. A material converts entire: `renderdesc` is
+`HSD_RvalueList`, `HSD_Spline`, the particle `HSD_SList`, `HSD_CObjDesc`,
+`HSD_WObjDesc`, `HSD_LightDesc` and `HSD_FogDesc` — a whole textured,
+skinned, constrained model, both of the non-geometry things a joint's union
+can hold, and the camera, lighting and fog a scene puts around it. A material converts entire: `renderdesc` is
 the only field left null, and deliberately, because it appears exactly once in
 upstream's tree — its own declaration — so nothing reads it.
 
@@ -578,6 +579,53 @@ a pointer at all: `HSD_JObjLoadJoint` does `*(u32*) &slist->data |=
 0x80000000` and `HSD_JObjDisp` reads a six-bit bank and a 24-bit offset out of
 it, so it is a packed integer the relocation table does not name — read with
 `data_word`, because asking for a pointer correctly refuses it.
+
+### The scene around the model · **converted**
+
+A joint graph is geometry and nothing more: nothing reaches the screen until a
+camera is current, and a stage carries its lighting and its fog in the same
+archive. `HSD_CObjDesc`, `HSD_WObjDesc`, `HSD_LightDesc` and `HSD_FogDesc` now
+convert, and the strongest thing the suite says about the camera is a
+*differential* assertion: the same camera built by hand and converted from
+bytes produce **byte-identical GX frames** — the same viewport, the same
+scissor, the same projection matrix. Any field read from the wrong offset
+moves a number there.
+
+Each of the four had something a layout table would not have told you.
+
+- `HSD_CObjDesc` is a **union of three camera shapes over a shared head**, and
+  `projection_type` at +0x06 decides which: perspective puts two floats at
+  +0x30, frustum and ortho put four. Reading the wrong arm gives a camera that
+  draws with a field of view where a clipping plane belongs. A fourth value is
+  reported rather than guessed, because `CObjLoad`'s switch ends in an
+  assertion.
+- A camera's **up vector is a pointer to a `Vec3`**, not an embedded one, and
+  `CObjLoad` reads it only when bit 0 of the flags is set — otherwise the roll
+  beside it orients the camera.
+- `HSD_LightDesc`'s union arm depends on **two** fields, not one: the type in
+  `flags & LOBJ_TYPE_MASK` picks point or spot, and `attnflags` then decides
+  between raw attenuation coefficients (six floats) and distance attenuation
+  (three for a point, five for a spot). An ambient or infinite light never
+  reads the union at all, so the port leaves it null rather than inventing a
+  size — which is exactly what `LObjLoad` does.
+- `HSD_FogAdjDesc` carries a **`Mtx44`**, four rows of four, where the rest of
+  HSD uses a 3×4 `Mtx`. Reading it as a `Mtx` would drop the last row and
+  shift every term past the twelfth.
+
+`Archive::scene_model_joints()` closes the loop for the model half: a public
+symbol names a scene root, its models list is a NULL-terminated array of model
+descriptors, and each descriptor's first field is a joint. That layout is
+validated against GALE01's own `MnMaAll.dat`, so a caller walks it and hands
+each offset to the converter.
+
+**The camera, light and fog lists in the same scene root have no accessor, and
+deliberately.** Their array shape has not been checked against a real archive
+— `tests/hsd/hsd_fixtures.cpp` carries a plausible `{ HSD_CObjDesc*,
+HSD_CameraAnim** }` pair shape, but nothing in the port reads a disc through
+it. Guessing it would be the one kind of mistake this port has spent its time
+avoiding, so those descriptors are reached one offset at a time until a disc
+says how they are arranged. **That is now the shortest thing the disc is
+needed for.**
 
 ### What the pointer work actually is
 
@@ -821,7 +869,7 @@ ever. A legally obtained disc image is a runtime input.
    the rest of the port to inherit. What replaced it is a callback scheduler
    whose determinism is asserted. The residual risk moved to phase 6: audio
    *does* run on a thread inside the SDK, and that thread is Aurora's.
-4. **A conversion that is wrong but not fatal.** Twenty-two structures convert
+4. **A conversion that is wrong but not fatal.** Twenty-six structures convert
    and each is tested, but a field read from the wrong offset produces a model
    that draws — slightly wrong. The fighters are where this first becomes
    visible, and by then it is 145,000 lines away from the cause. Mitigation:

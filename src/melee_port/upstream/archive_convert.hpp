@@ -26,14 +26,18 @@
 #include "descriptor_arena.hpp"
 
 extern "C" {
+#include <sysdolphin/baselib/cobj.h>
 #include <sysdolphin/baselib/dobj.h>
+#include <sysdolphin/baselib/fog.h>
 #include <sysdolphin/baselib/jobj.h>
 #include <sysdolphin/baselib/list.h>
 #include <sysdolphin/baselib/mobj.h>
 #include <sysdolphin/baselib/pobj.h>
 #include <sysdolphin/baselib/robj.h>
 #include <sysdolphin/baselib/spline.h>
+#include <sysdolphin/baselib/lobj.h>
 #include <sysdolphin/baselib/tobj.h>
+#include <sysdolphin/baselib/wobj.h>
 }
 
 namespace meleeboard::hsd {
@@ -106,6 +110,12 @@ public:
 
     std::size_t joint_count() const { return joints_by_offset_.size(); }
     std::size_t spline_count() const { return splines_by_offset_.size(); }
+    std::size_t camera_count() const { return cameras_by_offset_.size(); }
+    std::size_t light_count() const { return lights_by_offset_.size(); }
+    std::size_t world_object_count() const
+    {
+        return world_objects_by_offset_.size();
+    }
     std::size_t particle_node_count() const { return particle_nodes_.size(); }
 
     // Where the joint descriptors live.  Their addresses become ID-table
@@ -134,6 +144,14 @@ public:
     // fixture assembling a model by hand.
     HSD_TObjDesc* texture(uint32_t offset);
 
+    // The scene's other roots.  A joint graph is geometry and nothing more:
+    // nothing reaches the screen until a camera is current, and the lighting
+    // and fog a stage carries are separate lists in the same archive.  A
+    // scene descriptor names all three, so all three convert.
+    HSD_CObjDesc* camera(uint32_t offset);
+    HSD_LightDesc* light(uint32_t offset);
+    HSD_FogDesc* fog(uint32_t offset);
+
 private:
     HSD_DObjDesc* convert_display_object(uint32_t offset);
     HSD_MObjDesc* convert_material_object(uint32_t offset);
@@ -153,6 +171,11 @@ private:
     u8** convert_index_table(uint32_t offset, uint32_t count,
                              const char* what);
     HSD_RObjDesc* convert_reference_object(uint32_t offset);
+    HSD_WObjDesc* convert_world_object(uint32_t offset);
+    HSD_CObjDesc* convert_camera(uint32_t offset);
+    HSD_LightDesc* convert_light(uint32_t offset);
+    HSD_FogDesc* convert_fog(uint32_t offset);
+    HSD_FogAdjDesc* convert_fog_adjust(uint32_t offset);
     HSD_Spline* convert_spline(uint32_t offset);
     HSD_SList* convert_particle_list(uint32_t offset);
     HSD_RvalueList* convert_rvalue_list(uint32_t offset);
@@ -194,6 +217,19 @@ private:
     std::deque<std::vector<HSD_EnvelopeDesc*>> envelope_tables_;
     std::deque<std::vector<u8*>> index_tables_;
     std::deque<HSD_RObjDesc> reference_objects_;
+    std::deque<HSD_CObjDesc> cameras_;
+    std::deque<HSD_WObjDesc> world_objects_;
+    std::deque<HSD_LightDesc> lights_;
+    // The three shapes a light descriptor's union can point at, each held
+    // separately because each is a different size.
+    std::deque<HSD_LightAttn> light_attenuations_;
+    std::deque<HSD_LightPointDesc> light_points_;
+    std::deque<HSD_LightSpotDesc> light_spots_;
+    std::deque<HSD_FogDesc> fogs_;
+    std::deque<HSD_FogAdjDesc> fog_adjusts_;
+    // Standalone vectors a descriptor points at rather than embeds -- a
+    // camera's up vector is the only one so far.
+    std::deque<Vec3> vectors_;
     std::deque<HSD_Spline> splines_;
     std::deque<std::vector<Vec3>> control_points_;
     std::deque<std::vector<f32>> segment_lengths_;
@@ -219,6 +255,10 @@ private:
     std::unordered_map<uint32_t, HSD_TlutDesc*> palettes_by_offset_;
     std::unordered_map<uint32_t, HSD_RObjDesc*> reference_objects_by_offset_;
     std::unordered_map<uint32_t, HSD_Spline*> splines_by_offset_;
+    std::unordered_map<uint32_t, HSD_CObjDesc*> cameras_by_offset_;
+    std::unordered_map<uint32_t, HSD_WObjDesc*> world_objects_by_offset_;
+    std::unordered_map<uint32_t, HSD_LightDesc*> lights_by_offset_;
+    std::unordered_map<uint32_t, HSD_FogDesc*> fogs_by_offset_;
     std::unordered_map<uint32_t, HSD_SList*> particle_lists_by_offset_;
     std::vector<UnconvertedReference> unconverted_;
     std::string error_;

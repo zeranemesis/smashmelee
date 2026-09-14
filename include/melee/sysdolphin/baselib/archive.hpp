@@ -78,6 +78,22 @@ public:
     std::optional<SceneRoots> scene_roots(std::string_view symbol) const;
     std::optional<uint32_t> scene_model_count(std::string_view symbol) const;
     std::optional<uint32_t> scene_joint_count(std::string_view symbol) const;
+
+    // The root joint of each model in the scene at `symbol`, in scene order.
+    //
+    // This is the model half of a scene, and the one composable piece of it:
+    // the models list is a NULL-terminated array of pointers to model
+    // descriptors whose first field is the joint, a layout validated against
+    // GALE01's own MnMaAll.dat.  Hand each offset to
+    // ArchiveConverter::joint() and the scene's geometry is built.
+    //
+    // The camera, light and fog lists in the same scene root do not have an
+    // accessor here, and deliberately: their array shape has not been checked
+    // against a real archive, and guessing it would be the one kind of
+    // mistake this port has been avoiding.  Those descriptors convert one
+    // offset at a time until a disc says how they are arranged.
+    std::optional<std::vector<uint32_t>> scene_model_joints(
+        std::string_view symbol) const;
     std::optional<uint32_t> joint_tree_count(std::string_view symbol) const;
 
 private:

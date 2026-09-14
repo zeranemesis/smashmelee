@@ -261,6 +261,26 @@ order.
       takes, the weights cancel and the result is the zero quaternion.  It is
       asserted as such: a reimplementation that corrected it would diverge
       from the disc;
+- [x] convert the scene around the model: `HSD_CObjDesc`, `HSD_WObjDesc`,
+      `HSD_LightDesc` and `HSD_FogDesc`.  The camera's assertion is
+      differential rather than field-by-field -- the same camera built by hand
+      and converted from bytes produce byte-identical GX frames, so any field
+      read from the wrong offset moves a number in the trace.  Each of the
+      four carried something a layout table would not have said:
+      `HSD_CObjDesc` is a union of three camera shapes over a shared head with
+      `projection_type` at +0x06 choosing between two floats at +0x30 and
+      four; the up vector is a pointer to a `Vec3` that `CObjLoad` reads only
+      when bit 0 of the flags is set; `HSD_LightDesc`'s union arm depends on
+      *two* fields, the type in `flags & LOBJ_TYPE_MASK` and then `attnflags`
+      choosing raw attenuation over distance attenuation, with an ambient or
+      infinite light never reading the union at all; and `HSD_FogAdjDesc`
+      carries a `Mtx44` where the rest of HSD uses a 3x4 `Mtx`.
+      `Archive::scene_model_joints()` closes the model half of a scene -- a
+      public symbol to a list of joint offsets, on the layout validated
+      against GALE01's `MnMaAll.dat`.  The camera, light and fog lists in the
+      same scene root get no accessor on purpose: their array shape has not
+      been checked against a real archive, and that is now the shortest thing
+      the disc is needed for;
 - [x] convert the last two structure kinds a joint's union can hold,
       `HSD_Spline` and the particle `HSD_SList`, so a whole archive converts.
       Both had a trap a wire struct would have walked into.  `numcv` is not

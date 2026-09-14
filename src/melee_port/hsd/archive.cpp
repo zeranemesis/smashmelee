@@ -298,6 +298,35 @@ std::optional<uint32_t> Archive::scene_model_count(
     return std::nullopt;
 }
 
+std::optional<std::vector<uint32_t>> Archive::scene_model_joints(
+    std::string_view symbol) const
+{
+    const auto scene = scene_roots(symbol);
+    const auto model_count = scene_model_count(symbol);
+    if (!scene.has_value() || !model_count.has_value()) {
+        return std::nullopt;
+    }
+
+    std::vector<uint32_t> joints;
+    joints.reserve(*model_count);
+    for (uint32_t index = 0; index < *model_count; ++index) {
+        const auto model =
+            data_pointer(scene->models + index * sizeof(uint32_t));
+        if (!model.has_value() || data_size_ < kDynamicModelDescSize ||
+            *model > data_size_ - kDynamicModelDescSize) {
+            return std::nullopt;
+        }
+        const auto joint = data_pointer(*model);
+        if (!joint.has_value()) {
+            return std::nullopt;
+        }
+        if (*joint != kNullOffset) {
+            joints.push_back(*joint);
+        }
+    }
+    return joints;
+}
+
 std::optional<uint32_t> Archive::scene_joint_count(std::string_view symbol) const
 {
     const auto scene = scene_roots(symbol);

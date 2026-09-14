@@ -42,6 +42,62 @@ constexpr uint32_t kJointMatrix = 0x38;
 constexpr uint32_t kJointRObjDesc = 0x3C;
 constexpr uint32_t kJointSize = 0x40;
 
+// HSD_WObjDesc, 0x14 bytes.  A named point in the world, optionally driven
+// by a constraint.
+constexpr uint32_t kWObjClassName = 0x00;
+constexpr uint32_t kWObjPosition = 0x04;
+constexpr uint32_t kWObjRObjDesc = 0x10;
+constexpr uint32_t kWObjSize = 0x14;
+
+// HSD_CObjDesc, 0x40 bytes.  A union of three camera shapes over a common
+// head; projection_type at +0x06 says which, and everything up to +0x30 is
+// shared.
+constexpr uint32_t kCObjClassName = 0x00;
+constexpr uint32_t kCObjFlags = 0x04;
+constexpr uint32_t kCObjProjectionType = 0x06;
+constexpr uint32_t kCObjViewport = 0x08;
+constexpr uint32_t kCObjScissor = 0x10;
+constexpr uint32_t kCObjEyePosition = 0x18;
+constexpr uint32_t kCObjInterest = 0x1C;
+constexpr uint32_t kCObjRoll = 0x20;
+constexpr uint32_t kCObjUpVector = 0x24;
+constexpr uint32_t kCObjNear = 0x28;
+constexpr uint32_t kCObjFar = 0x2C;
+constexpr uint32_t kCObjProjection = 0x30;
+constexpr uint32_t kCObjSize = 0x40;
+
+// HSD_LightDesc, 0x1C bytes, chained through +0x04.
+constexpr uint32_t kLObjClassName = 0x00;
+constexpr uint32_t kLObjNext = 0x04;
+constexpr uint32_t kLObjFlags = 0x08;
+constexpr uint32_t kLObjAttnFlags = 0x0A;
+constexpr uint32_t kLObjColor = 0x0C;
+constexpr uint32_t kLObjPosition = 0x10;
+constexpr uint32_t kLObjInterest = 0x14;
+constexpr uint32_t kLObjUnion = 0x18;
+constexpr uint32_t kLObjSize = 0x1C;
+
+// The three shapes that union can point at.
+constexpr uint32_t kLightAttnSize = 0x18;  // six floats: a0..a2, k0..k2
+constexpr uint32_t kLightPointSize = 0x0C; // ref_br, ref_dist, dist_func
+constexpr uint32_t kLightSpotSize = 0x14;  // cutoff, spot_func, then point's
+
+// HSD_FogDesc, 0x14 bytes, and the adjustment table it can name.
+constexpr uint32_t kFogType = 0x00;
+constexpr uint32_t kFogAdjDesc = 0x04;
+constexpr uint32_t kFogStart = 0x08;
+constexpr uint32_t kFogEnd = 0x0C;
+constexpr uint32_t kFogColor = 0x10;
+constexpr uint32_t kFogSize = 0x14;
+
+constexpr uint32_t kFogAdjCenter = 0x00;
+constexpr uint32_t kFogAdjWidth = 0x02;
+constexpr uint32_t kFogAdjMatrix = 0x04;
+constexpr uint32_t kFogAdjSize = 0x44;
+
+// A light chain longer than this is a misread `next` field.
+constexpr uint32_t kMaxLightsInChain = 256;
+
 // HSD_Spline, 0x18 bytes on the console.  sysdolphin/baselib/spline.h.
 constexpr uint32_t kSplineType = 0x00;
 constexpr uint32_t kSplineControlCount = 0x02;
@@ -882,6 +938,360 @@ HSD_PObjDesc* ArchiveConverter::convert_primitive(uint32_t offset)
 
     return &host;
 }
+
+HSD_WObjDesc* ArchiveConverter::convert_world_object(uint32_t offset)
+{
+    const auto seen = world_objects_by_offset_.find(offset);
+    if (seen != world_objects_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kWObjSize)) {
+        error_ = "world object at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    world_objects_.emplace_back();
+    HSD_WObjDesc& host = world_objects_.back();
+    std::memset(&host, 0, sizeof host);
+    world_objects_by_offset_.emplace(offset, &host);
+
+    const auto class_name = archive_.data_pointer(offset + kWObjClassName);
+    if (class_name.has_value() && *class_name != Archive::kNullOffset) {
+        host.class_name = read_string(*class_name);
+    }
+    if (!read_vector(offset + kWObjPosition, host.pos)) {
+        error_ = "world object at offset " + std::to_string(offset) +
+                 " has a position outside the data section";
+        return nullptr;
+    }
+    const auto robjdesc = archive_.data_pointer(offset + kWObjRObjDesc);
+    if (robjdesc.has_value() && *robjdesc != Archive::kNullOffset) {
+        host.robjdesc = convert_reference_object(*robjdesc);
+        if (host.robjdesc == nullptr) {
+            return nullptr;
+        }
+    }
+    return &host;
+}
+
+HSD_CObjDesc* ArchiveConverter::convert_camera(uint32_t offset)
+{
+    const auto seen = cameras_by_offset_.find(offset);
+    if (seen != cameras_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kCObjSize)) {
+        error_ = "camera at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    cameras_.emplace_back();
+    HSD_CObjDesc& host = cameras_.back();
+    std::memset(&host, 0, sizeof host);
+    cameras_by_offset_.emplace(offset, &host);
+
+    // The three arms share everything up to +0x30, so the head is written
+    // through `common` and only the tail is written per projection.  They are
+    // standard-layout structures with that common initial sequence, which is
+    // what makes reading it back through another arm well defined.
+    const auto class_name = archive_.data_pointer(offset + kCObjClassName);
+    if (class_name.has_value() && *class_name != Archive::kNullOffset) {
+        host.common.class_name = read_string(*class_name);
+    }
+    host.common.flags = read_u16(offset + kCObjFlags);
+    host.common.projection_type = read_u16(offset + kCObjProjectionType);
+
+    host.common.viewport.xmin =
+        static_cast<s16>(read_u16(offset + kCObjViewport + 0));
+    host.common.viewport.xmax =
+        static_cast<s16>(read_u16(offset + kCObjViewport + 2));
+    host.common.viewport.ymin =
+        static_cast<s16>(read_u16(offset + kCObjViewport + 4));
+    host.common.viewport.ymax =
+        static_cast<s16>(read_u16(offset + kCObjViewport + 6));
+
+    host.common.scissor.left = read_u16(offset + kCObjScissor + 0);
+    host.common.scissor.right = read_u16(offset + kCObjScissor + 2);
+    host.common.scissor.top = read_u16(offset + kCObjScissor + 4);
+    host.common.scissor.bottom = read_u16(offset + kCObjScissor + 6);
+
+    const auto eyepos = archive_.data_pointer(offset + kCObjEyePosition);
+    if (eyepos.has_value() && *eyepos != Archive::kNullOffset) {
+        host.common.eyepos = convert_world_object(*eyepos);
+        if (host.common.eyepos == nullptr) {
+            return nullptr;
+        }
+    }
+    const auto interest = archive_.data_pointer(offset + kCObjInterest);
+    if (interest.has_value() && *interest != Archive::kNullOffset) {
+        host.common.interest = convert_world_object(*interest);
+        if (host.common.interest == nullptr) {
+            return nullptr;
+        }
+    }
+
+    host.common.roll = *archive_.data_float(offset + kCObjRoll);
+    host.common.nnear = *archive_.data_float(offset + kCObjNear);
+    host.common.ffar = *archive_.data_float(offset + kCObjFar);
+
+    // The up vector is a pointer to a Vec3 rather than an embedded one, and
+    // CObjLoad reads it only when bit 0 of the flags is set -- otherwise the
+    // roll above is what orients the camera.
+    const auto up_vector = archive_.data_pointer(offset + kCObjUpVector);
+    if (up_vector.has_value() && *up_vector != Archive::kNullOffset) {
+        vectors_.emplace_back();
+        Vec3& up = vectors_.back();
+        if (!read_vector(*up_vector, up)) {
+            error_ = "camera at offset " + std::to_string(offset) +
+                     " has an up vector outside the data section";
+            return nullptr;
+        }
+        host.common.up_vector = &up;
+    }
+
+    switch (host.common.projection_type) {
+    case PROJ_PERSPECTIVE:
+        host.perspective.fov =
+            *archive_.data_float(offset + kCObjProjection + 0);
+        host.perspective.aspect =
+            *archive_.data_float(offset + kCObjProjection + 4);
+        break;
+    case PROJ_FRUSTUM:
+    case PROJ_ORTHO:
+        host.frustum.top = *archive_.data_float(offset + kCObjProjection + 0);
+        host.frustum.bottom =
+            *archive_.data_float(offset + kCObjProjection + 4);
+        host.frustum.left = *archive_.data_float(offset + kCObjProjection + 8);
+        host.frustum.right =
+            *archive_.data_float(offset + kCObjProjection + 12);
+        break;
+    default:
+        // CObjLoad asserts on anything else, so reporting it is the point:
+        // the camera is otherwise complete and a caller can see what is
+        // wrong rather than getting a plausible-looking wrong projection.
+        note_unconverted(offset, offset + kCObjProjection,
+                         "HSD_CObjDesc projection (unknown type)");
+        break;
+    }
+
+    return &host;
+}
+
+HSD_LightDesc* ArchiveConverter::convert_light(uint32_t offset)
+{
+    const auto seen = lights_by_offset_.find(offset);
+    if (seen != lights_by_offset_.end()) {
+        return seen->second;
+    }
+
+    HSD_LightDesc* head = nullptr;
+    HSD_LightDesc* previous = nullptr;
+    uint32_t current = offset;
+
+    // HSD_LObjLoadDesc walks the chain itself, so the whole chain converts
+    // together rather than one descriptor recursing into the next.
+    for (uint32_t walked = 0; current != Archive::kNullOffset; ++walked) {
+        if (walked >= kMaxLightsInChain) {
+            error_ = "light chain at offset " + std::to_string(offset) +
+                     " does not end";
+            return nullptr;
+        }
+        const auto known = lights_by_offset_.find(current);
+        if (known != lights_by_offset_.end()) {
+            if (previous != nullptr) {
+                previous->next = known->second;
+                return head;
+            }
+            return known->second;
+        }
+        if (!archive_.contains_data_range(current, kLObjSize)) {
+            error_ = "light at offset " + std::to_string(current) +
+                     " lies outside the archive's data section";
+            return nullptr;
+        }
+
+        lights_.emplace_back();
+        HSD_LightDesc& host = lights_.back();
+        std::memset(&host, 0, sizeof host);
+        lights_by_offset_.emplace(current, &host);
+        if (previous != nullptr) {
+            previous->next = &host;
+        } else {
+            head = &host;
+        }
+
+        const auto class_name = archive_.data_pointer(current + kLObjClassName);
+        if (class_name.has_value() && *class_name != Archive::kNullOffset) {
+            host.class_name = read_string(*class_name);
+        }
+        host.flags = read_u16(current + kLObjFlags);
+        host.attnflags = read_u16(current + kLObjAttnFlags);
+        host.color.r = *archive_.data_byte(current + kLObjColor + 0);
+        host.color.g = *archive_.data_byte(current + kLObjColor + 1);
+        host.color.b = *archive_.data_byte(current + kLObjColor + 2);
+        host.color.a = *archive_.data_byte(current + kLObjColor + 3);
+
+        const auto position = archive_.data_pointer(current + kLObjPosition);
+        if (position.has_value() && *position != Archive::kNullOffset) {
+            host.position = convert_world_object(*position);
+            if (host.position == nullptr) {
+                return nullptr;
+            }
+        }
+        const auto interest = archive_.data_pointer(current + kLObjInterest);
+        if (interest.has_value() && *interest != Archive::kNullOffset) {
+            host.interest = convert_world_object(*interest);
+            if (host.interest == nullptr) {
+                return nullptr;
+            }
+        }
+
+        // Which shape the union points at is LObjLoad's own decision, and
+        // this mirrors its switch exactly.  An ambient or infinite light
+        // never reads it -- LObjLoad's cases for those touch only the
+        // position -- so the field stays null for them rather than being
+        // guessed at from a size nothing states.
+        const auto shape = archive_.data_pointer(current + kLObjUnion);
+        if (shape.has_value() && *shape != Archive::kNullOffset) {
+            const uint32_t type = host.flags & LOBJ_TYPE_MASK;
+            const bool raw_attenuation =
+                type == LOBJ_POINT ? (host.attnflags & LOBJ_LIGHT_ATTN) != 0
+                                   : host.attnflags != 0;
+            if (type == LOBJ_POINT || type == LOBJ_SPOT) {
+                if (raw_attenuation) {
+                    if (!archive_.contains_data_range(*shape, kLightAttnSize)) {
+                        error_ = "light at offset " + std::to_string(current) +
+                                 " has attenuation outside the data section";
+                        return nullptr;
+                    }
+                    light_attenuations_.emplace_back();
+                    HSD_LightAttn& attn = light_attenuations_.back();
+                    attn.a0 = *archive_.data_float(*shape + 0x00);
+                    attn.a1 = *archive_.data_float(*shape + 0x04);
+                    attn.a2 = *archive_.data_float(*shape + 0x08);
+                    attn.k0 = *archive_.data_float(*shape + 0x0C);
+                    attn.k1 = *archive_.data_float(*shape + 0x10);
+                    attn.k2 = *archive_.data_float(*shape + 0x14);
+                    host.u.attn = &attn;
+                } else if (type == LOBJ_POINT) {
+                    if (!archive_.contains_data_range(*shape,
+                                                      kLightPointSize)) {
+                        error_ = "light at offset " + std::to_string(current) +
+                                 " has point parameters outside the data "
+                                 "section";
+                        return nullptr;
+                    }
+                    light_points_.emplace_back();
+                    HSD_LightPointDesc& point = light_points_.back();
+                    point.ref_br = *archive_.data_float(*shape + 0x00);
+                    point.ref_dist = *archive_.data_float(*shape + 0x04);
+                    point.dist_func = *archive_.data_word(*shape + 0x08);
+                    host.u.point = &point;
+                } else {
+                    if (!archive_.contains_data_range(*shape, kLightSpotSize)) {
+                        error_ = "light at offset " + std::to_string(current) +
+                                 " has spot parameters outside the data "
+                                 "section";
+                        return nullptr;
+                    }
+                    light_spots_.emplace_back();
+                    HSD_LightSpotDesc& spot = light_spots_.back();
+                    spot.cutoff = *archive_.data_float(*shape + 0x00);
+                    spot.spot_func = *archive_.data_word(*shape + 0x04);
+                    spot.ref_br = *archive_.data_float(*shape + 0x08);
+                    spot.ref_dist = *archive_.data_float(*shape + 0x0C);
+                    spot.dist_func = *archive_.data_word(*shape + 0x10);
+                    host.u.spot = &spot;
+                }
+            }
+        }
+
+        const auto next = archive_.data_pointer(current + kLObjNext);
+        if (!next.has_value()) {
+            error_ = "light at offset " + std::to_string(current) +
+                     " has a next field that is not a relocated pointer";
+            return nullptr;
+        }
+        previous = &host;
+        current = *next;
+    }
+
+    return head;
+}
+
+HSD_FogAdjDesc* ArchiveConverter::convert_fog_adjust(uint32_t offset)
+{
+    if (!archive_.contains_data_range(offset, kFogAdjSize)) {
+        error_ = "fog adjustment at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    fog_adjusts_.emplace_back();
+    HSD_FogAdjDesc& host = fog_adjusts_.back();
+    std::memset(&host, 0, sizeof host);
+
+    host.center = read_u16(offset + kFogAdjCenter);
+    host.width = read_u16(offset + kFogAdjWidth);
+    // Mtx44, four rows of four -- not the 3x4 Mtx the rest of HSD uses.
+    for (uint32_t row = 0; row < 4; ++row) {
+        for (uint32_t column = 0; column < 4; ++column) {
+            host.mtx[row][column] = *archive_.data_float(
+                offset + kFogAdjMatrix + (row * 4 + column) * 4);
+        }
+    }
+    return &host;
+}
+
+HSD_FogDesc* ArchiveConverter::convert_fog(uint32_t offset)
+{
+    const auto seen = fogs_by_offset_.find(offset);
+    if (seen != fogs_by_offset_.end()) {
+        return seen->second;
+    }
+    if (!archive_.contains_data_range(offset, kFogSize)) {
+        error_ = "fog at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    fogs_.emplace_back();
+    HSD_FogDesc& host = fogs_.back();
+    std::memset(&host, 0, sizeof host);
+    fogs_by_offset_.emplace(offset, &host);
+
+    host.type = *archive_.data_word(offset + kFogType);
+    host.start = *archive_.data_float(offset + kFogStart);
+    host.end = *archive_.data_float(offset + kFogEnd);
+    host.color.r = *archive_.data_byte(offset + kFogColor + 0);
+    host.color.g = *archive_.data_byte(offset + kFogColor + 1);
+    host.color.b = *archive_.data_byte(offset + kFogColor + 2);
+    host.color.a = *archive_.data_byte(offset + kFogColor + 3);
+
+    const auto adjust = archive_.data_pointer(offset + kFogAdjDesc);
+    if (adjust.has_value() && *adjust != Archive::kNullOffset) {
+        host.fogadjdesc = convert_fog_adjust(*adjust);
+        if (host.fogadjdesc == nullptr) {
+            return nullptr;
+        }
+    }
+
+    return &host;
+}
+
+HSD_CObjDesc* ArchiveConverter::camera(uint32_t offset)
+{
+    return convert_camera(offset);
+}
+
+HSD_LightDesc* ArchiveConverter::light(uint32_t offset)
+{
+    return convert_light(offset);
+}
+
+HSD_FogDesc* ArchiveConverter::fog(uint32_t offset) { return convert_fog(offset); }
 
 HSD_Spline* ArchiveConverter::convert_spline(uint32_t offset)
 {

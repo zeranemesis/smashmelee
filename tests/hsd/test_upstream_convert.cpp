@@ -33,7 +33,12 @@ extern "C" {
 #include <sysdolphin/baselib/objalloc.h>
 #include <sysdolphin/baselib/robj.h>
 #include <sysdolphin/baselib/shadow.h>
+#include <sysdolphin/baselib/cobj.h>
+#include <sysdolphin/baselib/fog.h>
+#include <sysdolphin/baselib/lobj.h>
 #include <sysdolphin/baselib/spline.h>
+#include <sysdolphin/baselib/video.h>
+#include <sysdolphin/baselib/wobj.h>
 #include <sysdolphin/baselib/tev.h>
 }
 
@@ -1450,4 +1455,371 @@ MELEE_TEST(UpstreamConvert, RefusesMoreJointsThanTheArenaHolds)
     ArchiveConverter converter(archive, sizeof(HSD_Joint));
     CHECK(converter.joint(first) == nullptr);
     CHECK(converter.error().find("descriptor arena") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// The scene's other roots.
+//
+// A joint graph is geometry.  Nothing reaches the screen until a camera is
+// current, and a stage carries its lighting and its fog in the same archive.
+// These cases convert all three and hand them to upstream's own loaders.
+
+namespace {
+
+// Restores the render mode the boot installed.  The camera scales its
+// viewport by the mode's dimensions, and one earlier case fabricates a mode
+// of its own, so this is stated rather than inherited.
+void use_console_render_mode()
+{
+    *HSD_VIGetRenderMode() = GXNtsc480IntDf;
+}
+
+// An eye at z = 10 looking at the origin, 640x480, near 1, far 100 -- the
+// same camera tests/hsd/test_upstream_scene.cpp builds by hand.
+uint32_t add_camera(DatBuilder& builder, uint16_t projection_type)
+{
+    const uint32_t eye = builder.allocate(0x14);
+    builder.f32(eye + 0x04, 0.0F);
+    builder.f32(eye + 0x08, 0.0F);
+    builder.f32(eye + 0x0C, 10.0F);
+
+    const uint32_t interest = builder.allocate(0x14);
+
+    const uint32_t camera = builder.allocate(0x40);
+    builder.u16(camera + 0x04, 0); // flags: roll rather than an up vector
+    builder.u16(camera + 0x06, projection_type);
+    builder.s16(camera + 0x08, 0);   // viewport xmin
+    builder.s16(camera + 0x0A, 640); // xmax
+    builder.s16(camera + 0x0C, 0);   // ymin
+    builder.s16(camera + 0x0E, 480); // ymax
+    builder.u16(camera + 0x10, 0);   // scissor left
+    builder.u16(camera + 0x12, 640); // right
+    builder.u16(camera + 0x14, 0);   // top
+    builder.u16(camera + 0x16, 480); // bottom
+    builder.pointer(camera + 0x18, eye);
+    builder.pointer(camera + 0x1C, interest);
+    builder.f32(camera + 0x20, 0.0F);   // roll
+    builder.f32(camera + 0x28, 1.0F);   // near
+    builder.f32(camera + 0x2C, 100.0F); // far
+
+    if (projection_type == PROJ_PERSPECTIVE) {
+        builder.f32(camera + 0x30, 60.0F);
+        builder.f32(camera + 0x34, 640.0F / 480.0F);
+    } else {
+        builder.f32(camera + 0x30, 3.0F);  // top
+        builder.f32(camera + 0x34, -3.0F); // bottom
+        builder.f32(camera + 0x38, -4.0F); // left
+        builder.f32(camera + 0x3C, 4.0F);  // right
+    }
+    return camera;
+}
+
+} // namespace
+
+MELEE_TEST(UpstreamScene, ConvertsACameraIndistinguishablyFromAHandBuiltOne)
+{
+    init_object_pools();
+    use_console_render_mode();
+
+    // The hand-built descriptor first, recorded.  This is the same camera
+    // test_upstream_scene.cpp asserts term by term, so the numbers are
+    // already pinned; what this case adds is that the converted one produces
+    // exactly the same frame.
+    HSD_WObjDesc eye{};
+    eye.pos = Vec3{ 0.0F, 0.0F, 10.0F };
+    HSD_WObjDesc interest{};
+    HSD_CObjDesc built{};
+    built.perspective.projection_type = PROJ_PERSPECTIVE;
+    built.perspective.viewport = HSD_RectS16{ 0, 640, 0, 480 };
+    built.perspective.scissor = Scissor{ 0, 640, 0, 480 };
+    built.perspective.eyepos = &eye;
+    built.perspective.interest = &interest;
+    built.perspective.nnear = 1.0F;
+    built.perspective.ffar = 100.0F;
+    built.perspective.fov = 60.0F;
+    built.perspective.aspect = 640.0F / 480.0F;
+
+    meleeboard::test::gx::reset();
+    HSD_CObj* by_hand = HSD_CObjLoadDesc(&built);
+    REQUIRE(by_hand != nullptr);
+    REQUIRE(HSD_CObjSetCurrent(by_hand));
+    const std::string hand_built = meleeboard::test::gx::joined();
+    HSD_CObjEndCurrent();
+
+    // Now the same camera out of an archive.
+    DatBuilder builder;
+    const uint32_t offset = add_camera(builder, PROJ_PERSPECTIVE);
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_CObjDesc* converted = converter.camera(offset);
+    REQUIRE(converted != nullptr);
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
+    // The eye and the interest are two separate world objects, both built.
+    CHECK_EQ(converter.world_object_count(), std::size_t(2));
+    REQUIRE(converted->common.eyepos != nullptr);
+    CHECK_NEAR(converted->common.eyepos->pos.z, 10.0, kTolerance);
+
+    meleeboard::test::gx::reset();
+    HSD_CObj* from_disc = HSD_CObjLoadDesc(converted);
+    REQUIRE(from_disc != nullptr);
+    REQUIRE(HSD_CObjSetCurrent(from_disc));
+
+    // Byte for byte the same frame: viewport, scissor and projection matrix.
+    // Any field read from the wrong offset would move a number here.
+    CHECK_EQ(meleeboard::test::gx::joined(), hand_built);
+
+    HSD_CObjEndCurrent();
+}
+
+MELEE_TEST(UpstreamScene, ConvertsEachCameraProjectionIntoItsOwnUnionArm)
+{
+    // Perspective puts two floats at +0x30; frustum and ortho put four.  A
+    // converter that read the wrong arm would give a camera that draws with
+    // a field-of-view where a clipping plane belongs.
+    {
+        DatBuilder builder;
+        const uint32_t offset = add_camera(builder, PROJ_PERSPECTIVE);
+        const Archive archive = parse(builder);
+        ArchiveConverter converter(archive);
+        HSD_CObjDesc* camera = converter.camera(offset);
+        REQUIRE(camera != nullptr);
+        CHECK_NEAR(camera->perspective.fov, 60.0, kTolerance);
+        CHECK_NEAR(camera->perspective.aspect, 640.0 / 480.0, kTolerance);
+    }
+    for (uint16_t type : { (uint16_t) PROJ_FRUSTUM, (uint16_t) PROJ_ORTHO }) {
+        DatBuilder builder;
+        const uint32_t offset = add_camera(builder, type);
+        const Archive archive = parse(builder);
+        ArchiveConverter converter(archive);
+        HSD_CObjDesc* camera = converter.camera(offset);
+        REQUIRE(camera != nullptr);
+        CHECK_NEAR(camera->frustum.top, 3.0, kTolerance);
+        CHECK_NEAR(camera->frustum.bottom, -3.0, kTolerance);
+        CHECK_NEAR(camera->frustum.left, -4.0, kTolerance);
+        CHECK_NEAR(camera->frustum.right, 4.0, kTolerance);
+    }
+}
+
+MELEE_TEST(UpstreamScene, ReportsACameraProjectionUpstreamWouldAssertOn)
+{
+    // CObjLoad's switch has no default but an assertion, so a projection type
+    // it does not know is reported rather than silently read as one of the
+    // three.
+    DatBuilder builder;
+    const uint32_t offset = add_camera(builder, 9);
+    const Archive archive = parse(builder);
+    ArchiveConverter converter(archive);
+
+    HSD_CObjDesc* camera = converter.camera(offset);
+    REQUIRE(camera != nullptr);
+    CHECK_EQ((int) camera->common.projection_type, 9);
+    REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
+    CHECK_EQ(std::string(converter.unconverted()[0].kind),
+             std::string("HSD_CObjDesc projection (unknown type)"));
+}
+
+MELEE_TEST(UpstreamScene, ConvertsALightChainAndEachUnionShape)
+{
+    init_object_pools();
+
+    // Three lights in one chain: an infinite one that reads nothing from the
+    // union, a point light with raw attenuation coefficients, and a spot
+    // light with distance attenuation and a cutoff.
+    DatBuilder builder;
+
+    const uint32_t attn = builder.allocate(0x18);
+    for (int index = 0; index < 6; ++index) {
+        builder.f32(attn + (uint32_t) index * 4, (float) (index + 1));
+    }
+    const uint32_t spot = builder.allocate(0x14);
+    builder.f32(spot + 0x00, 45.0F); // cutoff
+    builder.u32(spot + 0x04, 2);     // spot_func
+    builder.f32(spot + 0x08, 0.5F);  // ref_br
+    builder.f32(spot + 0x0C, 20.0F); // ref_dist
+    builder.u32(spot + 0x10, 1);     // dist_func
+
+    const uint32_t position = builder.allocate(0x14);
+    builder.f32(position + 0x04, 1.0F);
+    builder.f32(position + 0x08, 2.0F);
+    builder.f32(position + 0x0C, 3.0F);
+    const uint32_t interest = builder.allocate(0x14);
+
+    const uint32_t third = builder.allocate(0x1C);
+    builder.u16(third + 0x08, LOBJ_SPOT | LOBJ_DIFFUSE);
+    builder.u16(third + 0x0A, 0); // distance attenuation, not raw
+    builder.pointer(third + 0x10, position);
+    builder.pointer(third + 0x14, interest);
+    builder.pointer(third + 0x18, spot);
+
+    const uint32_t second = builder.allocate(0x1C);
+    builder.u16(second + 0x08, LOBJ_POINT);
+    builder.u16(second + 0x0A, LOBJ_LIGHT_ATTN);
+    builder.pointer(second + 0x10, position);
+    builder.pointer(second + 0x18, attn);
+    builder.pointer(second + 0x04, third);
+
+    const uint32_t first = builder.allocate(0x1C);
+    builder.u16(first + 0x08, LOBJ_INFINITE | LOBJ_DIFFUSE);
+    builder.u8(first + 0x0C, 0x10);
+    builder.u8(first + 0x0D, 0x20);
+    builder.u8(first + 0x0E, 0x30);
+    builder.u8(first + 0x0F, 0xFF);
+    builder.pointer(first + 0x10, position);
+    builder.pointer(first + 0x04, second);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_LightDesc* head = converter.light(first);
+    REQUIRE(head != nullptr);
+    CHECK_EQ(converter.light_count(), std::size_t(3));
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
+    // Two world objects for three lights: all three name the same position,
+    // and converting one offset twice gives the same pointer -- here as
+    // everywhere else in this converter.
+    CHECK_EQ(converter.world_object_count(), std::size_t(2));
+
+    CHECK_EQ((int) head->color.r, 0x10);
+    CHECK_EQ((int) head->color.g, 0x20);
+    CHECK_EQ((int) head->color.b, 0x30);
+    CHECK_EQ((int) head->color.a, 0xFF);
+    REQUIRE(head->position != nullptr);
+    CHECK_NEAR(head->position->pos.y, 2.0, kTolerance);
+    // An infinite light's union is never read by LObjLoad, so it stays null
+    // rather than being guessed at from a size nothing states.
+    CHECK(head->u.p == nullptr);
+
+    REQUIRE(head->next != nullptr);
+    HSD_LightDesc* point = head->next;
+    CHECK_EQ((int) (point->flags & LOBJ_TYPE_MASK), LOBJ_POINT);
+    REQUIRE(point->u.attn != nullptr);
+    CHECK_NEAR(point->u.attn->a0, 1.0, kTolerance);
+    CHECK_NEAR(point->u.attn->k2, 6.0, kTolerance);
+
+    REQUIRE(point->next != nullptr);
+    HSD_LightDesc* spotlight = point->next;
+    CHECK_EQ((int) (spotlight->flags & LOBJ_TYPE_MASK), LOBJ_SPOT);
+    REQUIRE(spotlight->u.spot != nullptr);
+    CHECK_NEAR(spotlight->u.spot->cutoff, 45.0, kTolerance);
+    CHECK_EQ(spotlight->u.spot->spot_func, 2u);
+    CHECK_NEAR(spotlight->u.spot->ref_dist, 20.0, kTolerance);
+    CHECK_EQ(spotlight->u.spot->dist_func, 1u);
+    CHECK(spotlight->next == nullptr);
+
+    // And upstream's own loader builds the chain: three HSD_LObj, in order,
+    // each carrying the descriptor's colour.
+    HSD_LObj* lobj = HSD_LObjLoadDesc(head);
+    REQUIRE(lobj != nullptr);
+    CHECK_EQ((int) lobj->color.g, 0x20);
+    REQUIRE(lobj->next != nullptr);
+    REQUIRE(lobj->next->next != nullptr);
+    CHECK(lobj->next->next->next == nullptr);
+
+    HSD_LObjRemoveAll(lobj);
+}
+
+MELEE_TEST(UpstreamScene, ConvertsTheFogAndItsAdjustmentTable)
+{
+    DatBuilder builder;
+
+    const uint32_t adjust = builder.allocate(0x44);
+    builder.u16(adjust + 0x00, 320); // center
+    builder.u16(adjust + 0x02, 640); // width
+    for (uint32_t row = 0; row < 4; ++row) {
+        for (uint32_t column = 0; column < 4; ++column) {
+            builder.f32(adjust + 0x04 + (row * 4 + column) * 4,
+                        (float) (row * 4 + column));
+        }
+    }
+
+    const uint32_t fog = builder.allocate(0x14);
+    builder.u32(fog + 0x00, GX_FOG_LIN);
+    builder.pointer(fog + 0x04, adjust);
+    builder.f32(fog + 0x08, 10.0F);
+    builder.f32(fog + 0x0C, 200.0F);
+    builder.u8(fog + 0x10, 0x80);
+    builder.u8(fog + 0x11, 0x90);
+    builder.u8(fog + 0x12, 0xA0);
+    builder.u8(fog + 0x13, 0xFF);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_FogDesc* host = converter.fog(fog);
+    REQUIRE(host != nullptr);
+    CHECK_EQ(host->type, (u32) GX_FOG_LIN);
+    CHECK_NEAR(host->start, 10.0, kTolerance);
+    CHECK_NEAR(host->end, 200.0, kTolerance);
+    CHECK_EQ((int) host->color.r, 0x80);
+    CHECK_EQ((int) host->color.a, 0xFF);
+
+    // The adjustment table carries a Mtx44 -- four rows of four, not the 3x4
+    // the rest of HSD uses.  Reading it as a Mtx would drop the last row and
+    // shift every term after the twelfth.
+    REQUIRE(host->fogadjdesc != nullptr);
+    CHECK_EQ((int) host->fogadjdesc->center, 320);
+    CHECK_EQ((int) host->fogadjdesc->width, 640);
+    CHECK_NEAR(host->fogadjdesc->mtx[0][0], 0.0, kTolerance);
+    CHECK_NEAR(host->fogadjdesc->mtx[2][3], 11.0, kTolerance);
+    CHECK_NEAR(host->fogadjdesc->mtx[3][3], 15.0, kTolerance);
+}
+
+MELEE_TEST(UpstreamScene, BuildsEveryModelInASceneFromItsPublicSymbol)
+{
+    // How a real archive is entered: a public symbol names a scene root, the
+    // root's models list is a NULL-terminated array of model descriptors, and
+    // each descriptor's first field is a joint.  That much of the layout is
+    // validated against GALE01's own MnMaAll.dat; the camera, light and fog
+    // lists beside it are not, which is why they are reached by offset.
+    DatBuilder builder;
+    const uint32_t first_root = add_joint(builder, 1.0F, 0.0F, 0.0F);
+    const uint32_t first_child = add_joint(builder, 0.0F, 2.0F, 0.0F);
+    builder.pointer(first_root + 0x08, first_child);
+    const uint32_t second_root = add_joint(builder, 5.0F, 0.0F, 0.0F);
+
+    const uint32_t first_model = builder.allocate(0x14);
+    builder.pointer(first_model + 0x00, first_root);
+    const uint32_t second_model = builder.allocate(0x14);
+    builder.pointer(second_model + 0x00, second_root);
+
+    const uint32_t models = builder.allocate(3 * 4);
+    builder.pointer(models + 0, first_model);
+    builder.pointer(models + 4, second_model);
+    // The third entry stays the zero the allocator wrote and is never
+    // relocated, which is what terminates the array.
+
+    const uint32_t scene = builder.allocate(0x10);
+    builder.pointer(scene + 0x00, models);
+    builder.symbol("sceneRoot", scene);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    const auto joint_offsets = archive.scene_model_joints("sceneRoot");
+    REQUIRE(joint_offsets.has_value());
+    REQUIRE_EQ(joint_offsets->size(), std::size_t(2));
+    CHECK_EQ((*joint_offsets)[0], first_root);
+    CHECK_EQ((*joint_offsets)[1], second_root);
+
+    ArchiveConverter converter(archive);
+    std::vector<HSD_Joint*> hosts;
+    for (uint32_t offset : *joint_offsets) {
+        HSD_Joint* host = converter.joint(offset);
+        REQUIRE(host != nullptr);
+        hosts.push_back(host);
+    }
+
+    // Three joints across two models, and each model's tree intact.
+    CHECK_EQ(converter.joint_count(), std::size_t(3));
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
+    REQUIRE(hosts[0]->child != nullptr);
+    CHECK_NEAR(hosts[0]->child->position.y, 2.0, kTolerance);
+    CHECK(hosts[1]->child == nullptr);
+    CHECK_NEAR(hosts[1]->position.x, 5.0, kTolerance);
+
+    CHECK(!archive.scene_model_joints("missing").has_value());
 }
