@@ -194,6 +194,18 @@ order.
       generated texture coordinate.  Pixels and palette entries stay in the
       archive, in the console's tiled layout, because Aurora's GX reads those
       formats natively;
+- [x] settle the threading model, by measuring instead of choosing.  The plan
+      framed it as coroutines versus preemptive threads; the decompilation
+      answered that **Melee's shipping code creates no OS threads at all** —
+      `OSThread` appears four times in 1034 files, once in the debug console
+      and the rest in the Metrowerks debugger stub, and the SDK is not
+      decompiled, so DVD and audio threading is Aurora's.  What the game
+      actually uses is interrupt masking to guard against *handlers* (225
+      calls), three alarm timers, and SDK completion callbacks.  So:
+      `src/melee_port/upstream/os_scheduler.cpp`, one thread, a timebase that
+      advances one exact NTSC field — 675675 ticks, no remainder — alarms that
+      fire at their own instant, and a mask that really holds a handler off.
+      Determinism is asserted, not hoped for;
 - [x] fix the ID-table truncation.  Upstream keys its table on `(u32) joint`,
       the low word of a descriptor's address, and five places look one up that
       way — so on a 64-bit host two joints four gigabytes apart are one key,

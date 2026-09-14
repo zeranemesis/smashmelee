@@ -184,6 +184,7 @@ else ()
             ${CMAKE_CURRENT_LIST_DIR}/gx_record.cpp
             ${CMAKE_CURRENT_LIST_DIR}/gx_texture_stub.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_convert.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_scheduler.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_scene.cpp
             # The archive reader and the converter that builds host-sized
             # structures from it.  Neither defines an HSD symbol, so unlike
@@ -191,6 +192,7 @@ else ()
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/hsd/archive.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/archive_convert.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/descriptor_arena.cpp
+            ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/os_scheduler.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/gx_array_registry.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_core.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_fobj.cpp

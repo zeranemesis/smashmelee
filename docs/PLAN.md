@@ -125,14 +125,58 @@ dependency, and together they resolve every one of the 22 math symbols
 `mtx`, `cobj`, `jobj`, `dobj`, `tobj`, `robj` and `lobj` reference. The 23
 helpers this plan expected to write did not need writing.
 
-What remains for this phase:
+### The threading model · **settled, and smaller than this plan thought**
+
+This plan called the threading model "the only genuinely design-sensitive
+piece" and framed it as coroutines over `libco` versus preemptive host
+threads. Measuring the decompilation dissolved the question.
+
+**Melee's shipping code creates no OS threads.** `OSThread` appears four times
+in 1034 files: once in `debugconsole_main.c`, and the rest in `MetroTRK`, the
+Metrowerks debugger stub. Neither ships. The SDK itself is not decompiled at
+all — `src/` holds `MSL`, `MetroTRK`, `Runtime`, `melee` and `sysdolphin`, and
+no `dolphin` — so DVD and audio threading lives in libraries this port does
+not compile. That is Aurora's problem, not the game loop's.
+
+What the game does use is three things, and they are all about *when a
+callback is allowed to run*:
+
+| Surface | Calls | What it is really for |
+|---|---|---|
+| `OSDisableInterrupts` / `OSRestoreInterrupts` | 225, in 18 files | Guarding a structure against a **handler**, not a thread. `video.c` masks interrupts to swap a retrace callback pointer without the retrace handler seeing it half-written. |
+| `OSAlarm` | 3 users | Timers. `lbmemory.c` is the clearest: copy `0x19000` bytes, re-arm a 3 ms alarm, copy the next chunk — cooperative time-slicing written by hand, which is the closest thing in the game to a background thread and the best argument for not building one. |
+| SDK completion callbacks | — | DVD reads and audio, arriving from libraries this port does not compile. |
+
+So the model is **one thread**, and the only decision worth making is where
+callbacks are delivered. `src/melee_port/upstream/os_scheduler.cpp` makes it:
+a timebase that advances one exact NTSC field at a time, alarms that fire at
+their own instant in time-then-arming order, and a mask that really does hold
+a handler off until it is lifted.
+
+Two properties are worth recording:
+
+- **the NTSC field is an exact number of ticks.** 40.5 MHz over 60000/1001 Hz
+  is 675675 with no remainder, so a fixed step accumulates no error and the
+  port can be exact about time without a rational accumulator;
+- **a deferred handler sees a late clock, deliberately.** The decrementer
+  exception was pending while the mask was up and is taken when it comes down,
+  so `OSGetTime()` reports the moment of the restore, not the moment the alarm
+  was set for. A port that rewound the clock there would be inventing an
+  accuracy the hardware never had. A handler that needs the scheduled instant
+  reads it off `alarm->fire`, which survives.
+
+Determinism is asserted rather than hoped for: two runs of the same schedule
+produce the same handler calls at the same timebase values.
+
+`libco` stays vendored and unused. If a future need for real coroutines
+appears — a blocking DVD read the game expects to yield on — it is there, and
+the decision can be revisited against a concrete case rather than a guess.
+
+### What remains for this phase
 
 - the five absent symbols above;
-- the `OS` thread, alarm, interrupt and context surface — declared by Aurora,
-  but this is where "declared" and "behaves like the console" diverge most,
-  and it is the real work of the phase;
 - `VI`'s retrace callbacks, bridged onto Aurora's swapchain and the 60 Hz
-  clock;
+  clock — the scheduler is where they will be delivered;
 - the `DC`/`IC` cache operations, which are no-ops on a coherent host;
 - ~~`GXSetArray`'s two extra arguments.~~ **Done.** The adapter is in the
   prelude, and `src/melee_port/upstream/gx_array_registry.cpp` answers both
@@ -141,17 +185,11 @@ What remains for this phase:
   converts vertex data today, so the answer is the console's byte order — and
   a recorded trace shows it.
 
-**On `OS` threads.** Melee runs DVD and audio work on OS threads with alarms
-and interrupt masking. This repository already vendors `libco`; cooperative
-coroutines driven from the fixed 60 Hz step reproduce the console's
-scheduling far more faithfully than preemptive host threads, and keep the
-simulation deterministic. Preemption is the wrong default here.
-
 **Done when** upstream's `sysdolphin/baselib` links with no unresolved
 symbol, and each stub is listed in a table with what it does not do.
 
-**Size.** Smaller than first estimated for the math, unchanged for the
-threading model, which is the one genuinely design-sensitive piece.
+**Size.** Smaller than first estimated twice over: the math needed no writing,
+and the threading model turned out not to be a threading model.
 
 ## Phase 2 — Swap the hand-written HSD for upstream's
 
@@ -537,9 +575,11 @@ ever. A legally obtained disc image is a runtime input.
    determinate in the first place — see *Golden frames* above.
 2. **Audio.** Nothing has been measured. Mitigation: spike musyx against one
    Melee sound bank before committing phase 6's shape.
-3. **The threading model.** A wrong choice in phase 1 is expensive to undo
-   because everything above it inherits the scheduling. Mitigation: decide it
-   deliberately, with determinism as the acceptance criterion.
+3. ~~**The threading model.**~~ **Retired.** The risk assumed a choice that
+   does not exist: the game creates no threads, so there is no scheduling for
+   the rest of the port to inherit. What replaced it is a callback scheduler
+   whose determinism is asserted. The residual risk moved to phase 6: audio
+   *does* run on a thread inside the SDK, and that thread is Aurora's.
 4. **The 33 structure-layout assertions.** They exist to verify the match
    against the original binary and are meaningless on a 64-bit host.
    Mitigation: disable for host builds, and record that the `*32b` twins are
@@ -558,8 +598,9 @@ Phase 0 is done. These are what follow.
 Phase 0 is done, and so is action 5 of the previous list: the recording GX
 surface exists, and with it the whole scene-object layer.
 
-1. Decide the threading model and write it down (phase 1). Everything above
-   phase 1 inherits it, and it is the only remaining design decision.
+1. Bridge `VI`'s retrace callbacks onto the scheduler (phase 1) — the
+   remaining half of the callback boundary, and what a frame loop needs before
+   it can run at all.
 2. Convert `HSD_Spline` and the particle `HSD_SList` — the last two things
    `unconverted()` reports, and the last of a joint's three union forms.
 3. Key the HSD ID table on archive offsets rather than descriptor addresses

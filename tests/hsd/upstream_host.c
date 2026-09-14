@@ -92,14 +92,10 @@ void OSPanic(const char* file, int line, const char* message, ...)
     abort();
 }
 
-// perf.c times its statistics with this.  A counter rather than a clock: the
-// point of the offline suite is that the same input produces the same output,
-// and a real clock would put the wall time into a recorded frame.
-long long OSGetTime(void)
-{
-    static long long ticks = 0;
-    return ++ticks;
-}
+// OSGetTime used to be a bare counter here.  It now comes from
+// src/melee_port/upstream/os_scheduler.cpp, with a timebase that advances one
+// exact NTSC frame at a time -- so perf.c's statistics are measured against
+// the same clock the alarms fire on.
 
 // cobj.c asks which field is next when it jitters the viewport for an
 // interlaced mode.  Answering zero every time keeps the jitter deterministic;
