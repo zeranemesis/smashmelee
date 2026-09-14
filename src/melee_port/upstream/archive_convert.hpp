@@ -87,6 +87,7 @@ public:
     std::size_t display_object_count() const { return display_objects_.size(); }
     std::size_t primitive_count() const { return primitives_.size(); }
     std::size_t texture_count() const { return textures_.size(); }
+    std::size_t envelope_count() const { return envelopes_.size(); }
 
     // Every vertex array the converted primitives point at, in the order it
     // met them.  A renderer needs these to answer GXSetArray's extent and
@@ -113,6 +114,12 @@ private:
     HSD_TexLODDesc* convert_texture_lod(uint32_t offset);
     HSD_TObjTevDesc* convert_texture_tev(uint32_t offset);
     HSD_PEDesc* convert_pixel_engine(uint32_t offset);
+    HSD_Joint* convert_joint_graph(uint32_t offset);
+    HSD_EnvelopeDesc** convert_envelope_table(uint32_t offset);
+    HSD_EnvelopeDesc* convert_envelope_run(uint32_t offset);
+    HSD_ShapeSetDesc* convert_shape_set(uint32_t offset);
+    u8** convert_index_table(uint32_t offset, uint32_t count,
+                             const char* what);
     const void* raw_data(uint32_t offset, uint32_t* extent);
 
     // A big-endian u16, which the archive reader does not offer directly --
@@ -144,6 +151,12 @@ private:
     std::deque<HSD_TexLODDesc> texture_lods_;
     std::deque<HSD_TObjTevDesc> texture_tevs_;
     std::deque<HSD_PEDesc> pixel_engines_;
+    std::deque<HSD_ShapeSetDesc> shape_sets_;
+    // Each entry is one NULL-terminated run of envelope weights; the tables
+    // hold pointers into them, NULL-terminated in turn.
+    std::deque<std::vector<HSD_EnvelopeDesc>> envelopes_;
+    std::deque<std::vector<HSD_EnvelopeDesc*>> envelope_tables_;
+    std::deque<std::vector<u8*>> index_tables_;
     std::deque<std::vector<HSD_VtxDescList>> vertex_descriptors_;
     std::deque<std::string> strings_;
     std::deque<StoredMatrix> matrices_;

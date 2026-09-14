@@ -225,13 +225,24 @@ So `src/melee_port/upstream/archive_convert.cpp` reads through `Archive`,
 which carries the relocation table and answers `kNullOffset` for a field the
 table does not name. The bounds checks come along for free.
 
-**Twelve structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
+**Fifteen structures are converted**: `HSD_Joint`, `HSD_DObjDesc`,
 `HSD_MObjDesc`, `HSD_Material`, `HSD_PEDesc`, `HSD_PObjDesc`,
-`HSD_VtxDescList`, `HSD_TObjDesc`, `HSD_ImageDesc`, `HSD_TlutDesc`,
-`HSD_TexLODDesc` and `HSD_TObjTevDesc` — which is a whole textured model, and
-enough to draw one. A material now converts entire: `renderdesc` is the only
-field left null, and deliberately, because it appears exactly once in
-upstream's tree — its own declaration — so nothing reads it. Raw data that is not a structure — a
+`HSD_VtxDescList`, `HSD_ShapeSetDesc`, `HSD_EnvelopeDesc`, `HSD_TObjDesc`,
+`HSD_ImageDesc`, `HSD_TlutDesc`, `HSD_TexLODDesc` and `HSD_TObjTevDesc` —
+a whole textured, skinned model. A material converts entire: `renderdesc` is
+the only field left null, and deliberately, because it appears exactly once in
+upstream's tree — its own declaration — so nothing reads it.
+
+The skinning path is where the relocation-table rule earns its keep twice
+over. A primitive flagged `POBJ_ENVELOPE` points at a NULL-terminated array of
+runs, and each run is `{joint, weight}` pairs ending at an entry whose joint is
+NULL. Both terminators are pointer fields the relocation table does not name —
+a run ended by a *relocated* zero is a run whose last entry weights the joint
+at offset zero, and nothing in the bytes tells the two apart. Converting the
+envelope also makes the joint conversion re-entrant: a skinned primitive names
+joints, and it is reached from inside its own joint's conversion. Every joint
+is registered before its fields are filled in, so a nested call finds an entry
+rather than building a second copy or recurring forever. Raw data that is not a structure — a
 vertex array, a display list, a string, a matrix — has no pointers in it and
 no size change on a 64-bit host, so it stays in the archive and is addressed
 where it lies, through `Archive::data_span()`.
@@ -292,12 +303,12 @@ question about the format along the way, by asserting: a texture whose
 `repeat_s` or `repeat_t` is zero is malformed, not a texture with no repeats,
 because `MakeTextureMtx` divides by them.
 
-That is the mechanism the remaining ~23 structures follow.
+That is the mechanism the remaining ~20 structures follow.
 
 What `unconverted()` still reports, and therefore what remains before a real
-archive converts whole: `HSD_PObjDesc::u` (a joint, a shape set or an envelope
-table, by flags), `HSD_Spline` and the particle `HSD_SList` on a joint's
-union, and `HSD_RObjDesc` on a joint.
+archive converts whole: `HSD_RObjDesc` on a joint, and `HSD_Spline` or the
+particle `HSD_SList` where a joint's union holds one of those instead of a
+display object.
 
 ### What the pointer work actually is
 
@@ -526,11 +537,10 @@ surface exists, and with it the whole scene-object layer.
 
 1. Decide the threading model and write it down (phase 1). Everything above
    phase 1 inherits it, and it is the only remaining design decision.
-2. Convert what `HSD_PObjDesc::u` points at (phase 2) — a joint for a
-   rigid primitive, an `HSD_ShapeSetDesc` for a morph target, or a table of
-   `HSD_EnvelopeDesc` for a skinned one. That is what `unconverted()` still
-   reports on a real model, and it is what stands between a drawn model and a
-   *skinned* one.
+2. Convert `HSD_RObjDesc` (phase 2) — the reference objects a joint carries
+   for inverse kinematics and look-at constraints, and the last thing
+   `unconverted()` reports on a model. `robj` and `wobj` are already in the
+   conformance target, so the consumer is there waiting.
 3. Key the HSD ID table on archive offsets rather than descriptor addresses
    (phase 2) — nine of the fourteen remaining pointer casts, and the port's
    `id` unit already uses 32-bit keys, so this is a decision more than a

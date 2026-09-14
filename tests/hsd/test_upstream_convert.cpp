@@ -181,14 +181,62 @@ MELEE_TEST(UpstreamConvert, SeparatesARelocatedZeroFromANullPointer)
 
 MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
 {
-    // A primitive whose union names a shape set or an envelope table.  Those
-    // are still to come, so the field is left null -- but the reference is
-    // reported, because a model that silently loses its skinning looks
-    // exactly like a broken renderer.
+    // A joint that carries a reference object -- inverse kinematics, look-at
+    // constraints and the like.  That converter is still to come, so the
+    // field is left null and the reference is reported.
     DatBuilder builder;
-    const uint32_t envelopes = builder.allocate(0x10);
+    const uint32_t robjdesc = builder.allocate(0x1C);
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    builder.pointer(joint + 0x3C, robjdesc);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(joint);
+    REQUIRE(host != nullptr);
+    CHECK(host->robjdesc == nullptr);
+
+    REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
+    CHECK_EQ(converter.unconverted()[0].holder, joint);
+    CHECK_EQ(converter.unconverted()[0].target, robjdesc);
+    CHECK_EQ(std::string(converter.unconverted()[0].kind),
+             std::string("HSD_RObjDesc"));
+}
+
+MELEE_TEST(UpstreamConvert, BuildsASkinnedPrimitivesEnvelopeTable)
+{
+    // The skinning path.  A primitive flagged POBJ_ENVELOPE points at a
+    // NULL-terminated array of runs, and each run is {joint, weight} pairs
+    // ending at an entry whose joint is NULL.  Two levels of terminator, both
+    // of which depend on the relocation table rather than on the bytes.
+    DatBuilder builder;
+
+    const uint32_t bone_a = add_joint(builder, 1.0F, 0.0F, 0.0F);
+    const uint32_t bone_b = add_joint(builder, 0.0F, 1.0F, 0.0F);
+
+    // Run one: both bones, then the terminator.
+    const uint32_t run_one = builder.allocate(3 * 8);
+    builder.pointer(run_one + 0x00, bone_a);
+    builder.f32(run_one + 0x04, 0.75F);
+    builder.pointer(run_one + 0x08, bone_b);
+    builder.f32(run_one + 0x0C, 0.25F);
+    // run_one + 0x10 stays zero and unrelocated: the terminator.
+
+    // Run two: one bone.
+    const uint32_t run_two = builder.allocate(2 * 8);
+    builder.pointer(run_two + 0x00, bone_b);
+    builder.f32(run_two + 0x04, 1.0F);
+
+    const uint32_t table = builder.allocate(3 * 4);
+    builder.pointer(table + 0x00, run_one);
+    builder.pointer(table + 0x04, run_two);
+    // table + 0x08 stays zero and unrelocated: the terminator.
+
     const uint32_t primitive = builder.allocate(0x18);
-    builder.pointer(primitive + 0x14, envelopes);
+    builder.u16(primitive + 0x0C, 2 << 12); // POBJ_ENVELOPE
+    builder.pointer(primitive + 0x14, table);
+
     const uint32_t display_object = builder.allocate(0x10);
     builder.pointer(display_object + 0x0C, primitive);
     const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
@@ -200,15 +248,64 @@ MELEE_TEST(UpstreamConvert, RecordsWhatItCannotBuildYet)
     ArchiveConverter converter(archive);
     HSD_Joint* host = converter.joint(joint);
     REQUIRE(host != nullptr);
+    CHECK_EQ(converter.error(), std::string());
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
+
+    REQUIRE(host->u.dobjdesc != nullptr);
+    HSD_PObjDesc* pobj = host->u.dobjdesc->pobjdesc;
+    REQUIRE(pobj != nullptr);
+    REQUIRE(pobj->u.envelope_p != nullptr);
+
+    HSD_EnvelopeDesc** table_host = pobj->u.envelope_p;
+    REQUIRE(table_host[0] != nullptr);
+    REQUIRE(table_host[1] != nullptr);
+    CHECK(table_host[2] == nullptr);
+
+    REQUIRE(table_host[0][0].joint != nullptr);
+    CHECK_NEAR(table_host[0][0].joint->position.x, 1.0, kTolerance);
+    CHECK_NEAR(table_host[0][0].weight, 0.75, kTolerance);
+    REQUIRE(table_host[0][1].joint != nullptr);
+    CHECK_NEAR(table_host[0][1].joint->position.y, 1.0, kTolerance);
+    CHECK_NEAR(table_host[0][1].weight, 0.25, kTolerance);
+    CHECK(table_host[0][2].joint == nullptr);
+
+    CHECK(table_host[1][1].joint == nullptr);
+
+    // The same bone reached twice is one host joint, which is what lets the
+    // skinning weight the matrix the rest of the scene graph animates.
+    CHECK(table_host[0][1].joint == table_host[1][0].joint);
+}
+
+MELEE_TEST(UpstreamConvert, BuildsARigidPrimitivesJoint)
+{
+    // POBJ_SKIN, the default: the union is a single joint whose matrix the
+    // primitive is drawn in.  The joint converts through the same graph as
+    // the tree it hangs off, so reaching it twice gives one object.
+    DatBuilder builder;
+    const uint32_t bone = add_joint(builder, 4.0F, 0.0F, 0.0F);
+    const uint32_t primitive = builder.allocate(0x18);
+    builder.pointer(primitive + 0x14, bone);
+    const uint32_t display_object = builder.allocate(0x10);
+    builder.pointer(display_object + 0x0C, primitive);
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    builder.pointer(joint + 0x08, bone);
+    builder.pointer(joint + 0x10, display_object);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(joint);
+    REQUIRE(host != nullptr);
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
+
     REQUIRE(host->u.dobjdesc != nullptr);
     REQUIRE(host->u.dobjdesc->pobjdesc != nullptr);
-    CHECK(host->u.dobjdesc->pobjdesc->u.joint == nullptr);
-
-    REQUIRE_EQ(converter.unconverted().size(), std::size_t(1));
-    CHECK_EQ(converter.unconverted()[0].holder, primitive);
-    CHECK_EQ(converter.unconverted()[0].target, envelopes);
-    CHECK_EQ(std::string(converter.unconverted()[0].kind),
-             std::string("HSD_PObjDesc::u"));
+    REQUIRE(host->u.dobjdesc->pobjdesc->u.joint != nullptr);
+    CHECK_NEAR(host->u.dobjdesc->pobjdesc->u.joint->position.x, 4.0,
+               kTolerance);
+    // Reached as the tree's child and as the primitive's joint -- one object.
+    CHECK(host->u.dobjdesc->pobjdesc->u.joint == host->child);
 }
 
 MELEE_TEST(UpstreamConvert, ConvertsThePixelEngineDescriptorByValue)
@@ -863,4 +960,76 @@ MELEE_TEST(UpstreamConvert, DrawsATexturedModelThroughTheGamesOwnDisplayPath)
           std::string::npos);
 
     HSD_JObjRemoveAll(jobj);
+}
+
+MELEE_TEST(UpstreamConvert, BuildsAMorphTargetsShapeSet)
+{
+    // POBJ_SHAPEANIM: the union is a shape set, whose two index tables hold
+    // one pointer per shape.  The index runs themselves are bytes and stay in
+    // the archive; only the table of addresses is rebuilt at host width.
+    DatBuilder builder;
+
+    const uint32_t indices_one = builder.allocate(4);
+    builder.u8(indices_one + 0, 0x10);
+    const uint32_t indices_two = builder.allocate(4);
+    builder.u8(indices_two + 0, 0x20);
+
+    const uint32_t index_table = builder.allocate(2 * 4);
+    builder.pointer(index_table + 0x00, indices_one);
+    builder.pointer(index_table + 0x04, indices_two);
+
+    const uint32_t vertices = builder.allocate(3 * 4);
+    const uint32_t descriptors = builder.allocate(0x18 * 2);
+    builder.u32(descriptors + 0x00, 9); // GX_VA_POS
+    builder.u32(descriptors + 0x04, 2); // GX_INDEX8
+    builder.u16(descriptors + 0x12, 12);
+    builder.pointer(descriptors + 0x14, vertices);
+    builder.u32(descriptors + 0x18, 0xFF);
+
+    const uint32_t shape_set = builder.allocate(0x1C);
+    builder.u16(shape_set + 0x00, 1); // flags
+    builder.u16(shape_set + 0x02, 2); // nb_shape
+    builder.u32(shape_set + 0x04, 3); // nb_vertex_index
+    builder.pointer(shape_set + 0x08, descriptors);
+    builder.pointer(shape_set + 0x0C, index_table);
+
+    const uint32_t primitive = builder.allocate(0x18);
+    builder.u16(primitive + 0x0C, 1 << 12); // POBJ_SHAPEANIM
+    builder.pointer(primitive + 0x14, shape_set);
+
+    const uint32_t display_object = builder.allocate(0x10);
+    builder.pointer(display_object + 0x0C, primitive);
+    const uint32_t joint = add_joint(builder, 0.0F, 0.0F, 0.0F);
+    builder.pointer(joint + 0x10, display_object);
+
+    const Archive archive = parse(builder);
+    REQUIRE(archive.is_valid());
+
+    ArchiveConverter converter(archive);
+    HSD_Joint* host = converter.joint(joint);
+    REQUIRE(host != nullptr);
+    CHECK_EQ(converter.error(), std::string());
+    CHECK_EQ(converter.unconverted().size(), std::size_t(0));
+
+    REQUIRE(host->u.dobjdesc != nullptr);
+    REQUIRE(host->u.dobjdesc->pobjdesc != nullptr);
+    HSD_ShapeSetDesc* shapes = host->u.dobjdesc->pobjdesc->u.shape_set;
+    REQUIRE(shapes != nullptr);
+
+    CHECK_EQ(shapes->flags, static_cast<u16>(1));
+    CHECK_EQ(shapes->nb_shape, static_cast<u16>(2));
+    CHECK_EQ(shapes->nb_vertex_index, 3);
+    REQUIRE(shapes->vertex_desc != nullptr);
+    CHECK_EQ(shapes->vertex_desc[0].attr, GX_VA_POS);
+
+    REQUIRE(shapes->vertex_idx_list != nullptr);
+    REQUIRE(shapes->vertex_idx_list[0] != nullptr);
+    REQUIRE(shapes->vertex_idx_list[1] != nullptr);
+    CHECK_EQ(shapes->vertex_idx_list[0][0], static_cast<u8>(0x10));
+    CHECK_EQ(shapes->vertex_idx_list[1][0], static_cast<u8>(0x20));
+
+    // The normal side is absent in this fixture and stays null rather than
+    // pointing at a table of nothing.
+    CHECK(shapes->normal_desc == nullptr);
+    CHECK(shapes->normal_idx_list == nullptr);
 }

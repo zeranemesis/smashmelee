@@ -194,6 +194,16 @@ order.
       generated texture coordinate.  Pixels and palette entries stay in the
       archive, in the console's tiled layout, because Aurora's GX reads those
       formats natively;
+- [x] convert what a primitive's union holds, in all three of its forms — a
+      joint for a rigid primitive, an `HSD_ShapeSetDesc` for a morph target,
+      and a table of `HSD_EnvelopeDesc` for a skinned one.  The envelope path
+      leans on the relocation-table rule twice: both its terminators are
+      pointer fields the table does not name, and a run ended by a *relocated*
+      zero would be a run whose last entry weights the joint at offset zero.
+      It also makes the joint conversion re-entrant, because a skinned
+      primitive names joints and is reached from inside its own joint's
+      conversion — a bone weighted from two runs still comes back as one
+      object, which is what lets the skinning follow the animated matrix;
 - [x] establish, rather than assume, that a recorded frame cannot be compared
       whole.  `HSD_TExpSetReg` in upstream's `texp.c` declares `GXColor
       reg[8]`, never initializes it, and writes only the components a constant

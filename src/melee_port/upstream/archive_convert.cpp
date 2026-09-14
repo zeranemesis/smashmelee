@@ -163,6 +163,34 @@ constexpr uint32_t kTevTev1 = 0x18;
 constexpr uint32_t kTevActive = 0x1C;
 constexpr uint32_t kTevSize = 0x20;
 
+// HSD_ShapeSetDesc, 0x1C bytes.  The two index tables hold nb_shape pointers
+// each -- pobj.c clamps its shape id to nb_shape - 1 before indexing them.
+constexpr uint32_t kShapeFlags = 0x00;
+constexpr uint32_t kShapeCount = 0x02;
+constexpr uint32_t kShapeVertexIndexCount = 0x04;
+constexpr uint32_t kShapeVertexDesc = 0x08;
+constexpr uint32_t kShapeVertexIndexList = 0x0C;
+constexpr uint32_t kShapeNormalIndexCount = 0x10;
+constexpr uint32_t kShapeNormalDesc = 0x14;
+constexpr uint32_t kShapeNormalIndexList = 0x18;
+constexpr uint32_t kShapeSetSize = 0x1C;
+
+// HSD_EnvelopeDesc, eight bytes: a joint and a weight.  A run of them ends at
+// the entry whose joint is NULL -- and "NULL" here means a pointer field the
+// relocation table does not name, which is exactly the distinction a wire
+// struct could not make.  A run terminated by a *relocated* zero would be a
+// run whose last entry weights joint 0.
+constexpr uint32_t kEnvelopeJoint = 0x00;
+constexpr uint32_t kEnvelopeWeight = 0x04;
+constexpr uint32_t kEnvelopeSize = 0x08;
+
+// Bounds on the two tables, past which the archive is corrupt rather than
+// elaborate.  GX addresses ten position matrices, and a vertex weighted by
+// more than a few joints is not a thing Melee's rigs do.
+constexpr uint32_t kMaxEnvelopeTable = 64;
+constexpr uint32_t kMaxEnvelopeRun = 64;
+constexpr uint32_t kMaxShapeCount = 1024;
+
 // HSD_PEDesc, twelve bytes and every one of them a u8, so the structure is
 // the same size on both sides -- which matters, because MObjLoad copies it
 // with memcpy(sizeof(HSD_PEDesc)) rather than field by field.
@@ -342,6 +370,172 @@ HSD_VtxDescList* ArchiveConverter::convert_vertex_descriptors(uint32_t offset)
     return nullptr;
 }
 
+u8** ArchiveConverter::convert_index_table(uint32_t offset, uint32_t count,
+                                           const char* what)
+{
+    // An array of pointers to index runs.  The runs are bytes, so they stay
+    // in the archive; only the array of addresses has to be rebuilt at host
+    // width.
+    std::vector<u8*> table;
+    table.reserve(count);
+    for (uint32_t index = 0; index < count; ++index) {
+        const auto entry = archive_.data_pointer(offset + index * 4);
+        if (!entry.has_value()) {
+            error_ = std::string(what) + " at offset " +
+                     std::to_string(offset) + " runs off the data section";
+            return nullptr;
+        }
+        if (*entry == Archive::kNullOffset) {
+            table.push_back(nullptr);
+            continue;
+        }
+        u8* run = const_cast<u8*>(static_cast<const u8*>(
+            raw_data(*entry, nullptr)));
+        if (run == nullptr) {
+            error_ = std::string(what) + " at offset " +
+                     std::to_string(offset) + " points outside the data "
+                     "section";
+            return nullptr;
+        }
+        table.push_back(run);
+    }
+    index_tables_.push_back(std::move(table));
+    return index_tables_.back().data();
+}
+
+HSD_ShapeSetDesc* ArchiveConverter::convert_shape_set(uint32_t offset)
+{
+    if (!archive_.contains_data_range(offset, kShapeSetSize)) {
+        error_ = "shape set at offset " + std::to_string(offset) +
+                 " lies outside the archive's data section";
+        return nullptr;
+    }
+
+    shape_sets_.emplace_back();
+    HSD_ShapeSetDesc& host = shape_sets_.back();
+    std::memset(&host, 0, sizeof host);
+
+    host.flags = read_u16(offset + kShapeFlags);
+    host.nb_shape = read_u16(offset + kShapeCount);
+    host.nb_vertex_index =
+        static_cast<s32>(*archive_.data_word(offset + kShapeVertexIndexCount));
+    host.nb_normal_index =
+        static_cast<s32>(*archive_.data_word(offset + kShapeNormalIndexCount));
+
+    if (host.nb_shape > kMaxShapeCount) {
+        error_ = "shape set at offset " + std::to_string(offset) +
+                 " claims more shapes than an archive can hold";
+        return nullptr;
+    }
+
+    const auto vertex_desc = archive_.data_pointer(offset + kShapeVertexDesc);
+    if (vertex_desc.has_value() && *vertex_desc != Archive::kNullOffset) {
+        host.vertex_desc = convert_vertex_descriptors(*vertex_desc);
+        if (host.vertex_desc == nullptr) {
+            return nullptr;
+        }
+    }
+    const auto normal_desc = archive_.data_pointer(offset + kShapeNormalDesc);
+    if (normal_desc.has_value() && *normal_desc != Archive::kNullOffset) {
+        host.normal_desc = convert_vertex_descriptors(*normal_desc);
+        if (host.normal_desc == nullptr) {
+            return nullptr;
+        }
+    }
+
+    const auto vertex_list =
+        archive_.data_pointer(offset + kShapeVertexIndexList);
+    if (vertex_list.has_value() && *vertex_list != Archive::kNullOffset) {
+        host.vertex_idx_list = convert_index_table(*vertex_list, host.nb_shape,
+                                                   "shape vertex index table");
+        if (host.vertex_idx_list == nullptr) {
+            return nullptr;
+        }
+    }
+    const auto normal_list =
+        archive_.data_pointer(offset + kShapeNormalIndexList);
+    if (normal_list.has_value() && *normal_list != Archive::kNullOffset) {
+        host.normal_idx_list = convert_index_table(*normal_list, host.nb_shape,
+                                                   "shape normal index table");
+        if (host.normal_idx_list == nullptr) {
+            return nullptr;
+        }
+    }
+
+    return &host;
+}
+
+HSD_EnvelopeDesc* ArchiveConverter::convert_envelope_run(uint32_t offset)
+{
+    // A run of {joint, weight} pairs ending at the entry whose joint is NULL.
+    // NULL means a pointer field the relocation table does not name: a run
+    // ended by a *relocated* zero is a run whose last entry weights the joint
+    // at data-section offset zero, and the two look identical in the bytes.
+    std::vector<HSD_EnvelopeDesc> run;
+    for (uint32_t index = 0; index <= kMaxEnvelopeRun; ++index) {
+        const uint32_t entry = offset + index * kEnvelopeSize;
+        if (!archive_.contains_data_range(entry, kEnvelopeSize)) {
+            error_ = "envelope run at offset " + std::to_string(offset) +
+                     " runs off the end of the data section";
+            return nullptr;
+        }
+        const auto joint_offset =
+            archive_.data_pointer(entry + kEnvelopeJoint);
+        if (!joint_offset.has_value()) {
+            error_ = "envelope run at offset " + std::to_string(offset) +
+                     " has a joint field that is neither null nor relocated";
+            return nullptr;
+        }
+
+        HSD_EnvelopeDesc host{};
+        std::memset(&host, 0, sizeof host);
+        if (*joint_offset == Archive::kNullOffset) {
+            run.push_back(host);
+            envelopes_.push_back(std::move(run));
+            return envelopes_.back().data();
+        }
+
+        host.joint = convert_joint_graph(*joint_offset);
+        if (host.joint == nullptr) {
+            return nullptr;
+        }
+        host.weight = *archive_.data_float(entry + kEnvelopeWeight);
+        run.push_back(host);
+    }
+
+    error_ = "envelope run at offset " + std::to_string(offset) +
+             " has no terminating entry";
+    return nullptr;
+}
+
+HSD_EnvelopeDesc** ArchiveConverter::convert_envelope_table(uint32_t offset)
+{
+    // A NULL-terminated array of pointers, one per position-matrix slot.
+    std::vector<HSD_EnvelopeDesc*> table;
+    for (uint32_t index = 0; index <= kMaxEnvelopeTable; ++index) {
+        const auto entry = archive_.data_pointer(offset + index * 4);
+        if (!entry.has_value()) {
+            error_ = "envelope table at offset " + std::to_string(offset) +
+                     " runs off the end of the data section";
+            return nullptr;
+        }
+        if (*entry == Archive::kNullOffset) {
+            table.push_back(nullptr);
+            envelope_tables_.push_back(std::move(table));
+            return envelope_tables_.back().data();
+        }
+        HSD_EnvelopeDesc* run = convert_envelope_run(*entry);
+        if (run == nullptr) {
+            return nullptr;
+        }
+        table.push_back(run);
+    }
+
+    error_ = "envelope table at offset " + std::to_string(offset) +
+             " has no terminating entry";
+    return nullptr;
+}
+
 HSD_PObjDesc* ArchiveConverter::convert_primitive(uint32_t offset)
 {
     const auto seen = primitives_by_offset_.find(offset);
@@ -390,11 +584,35 @@ HSD_PObjDesc* ArchiveConverter::convert_primitive(uint32_t offset)
             const_cast<u8*>(static_cast<const u8*>(raw_data(*display, nullptr)));
     }
 
-    // The union at +0x14 is a joint, a shape set or an envelope table
-    // depending on the flags -- none of them converted yet.
+    // The union at +0x14 is a joint, a shape set or an envelope table, and
+    // pobj_type() -- two bits of the flags -- says which.  All three are
+    // built; a fourth value of those two bits is not a thing upstream's own
+    // switch handles, so it is reported rather than guessed at.
     const auto union_field = archive_.data_pointer(offset + kPObjUnion);
     if (union_field.has_value() && *union_field != Archive::kNullOffset) {
-        note_unconverted(offset, *union_field, "HSD_PObjDesc::u");
+        switch (host.flags & 0x3000) {
+        case POBJ_SKIN:
+            host.u.joint = convert_joint_graph(*union_field);
+            if (host.u.joint == nullptr) {
+                return nullptr;
+            }
+            break;
+        case POBJ_SHAPEANIM:
+            host.u.shape_set = convert_shape_set(*union_field);
+            if (host.u.shape_set == nullptr) {
+                return nullptr;
+            }
+            break;
+        case POBJ_ENVELOPE:
+            host.u.envelope_p = convert_envelope_table(*union_field);
+            if (host.u.envelope_p == nullptr) {
+                return nullptr;
+            }
+            break;
+        default:
+            note_unconverted(offset, *union_field, "HSD_PObjDesc::u");
+            break;
+        }
     }
 
     const auto next = archive_.data_pointer(offset + kPObjNext);
@@ -786,6 +1004,15 @@ void ArchiveConverter::note_unconverted(uint32_t holder, uint32_t target,
 HSD_Joint* ArchiveConverter::joint(uint32_t offset)
 {
     error_.clear();
+    return convert_joint_graph(offset);
+}
+
+// Re-entrant on purpose: a skinned primitive's envelope weights name joints,
+// so this is called from inside its own display-object conversion.  Every
+// joint is registered before its fields are filled in, so a nested call finds
+// an entry rather than converting a second copy or recurring forever.
+HSD_Joint* ArchiveConverter::convert_joint_graph(uint32_t offset)
+{
     if (offset == Archive::kNullOffset) {
         return nullptr;
     }
