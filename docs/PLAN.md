@@ -51,11 +51,12 @@ reimplemented. The rest of the sequencing still holds.
 ## Where the port is today
 
 - A native shell mounts a GALE01 v1.02 image and exposes its filesystem.
-- **38 of the 76 `sysdolphin/baselib` units** — upstream's own HSD, unmodified
+- **41 of the 76 `sysdolphin/baselib` units** — upstream's own HSD, unmodified
   — compile, link and answer behavioral assertions: the object and class
   model, animation, the archive loader, the entire render half (`jobj`,
   `dobj`, `mobj`, `pobj`, `tobj`, `cobj`, `lobj`, `tev`, `texp`, `state`,
-  `shadow`, `robj`, `wobj`, `displayfunc`), the video layer, and the boot.
+  `shadow`, `robj`, `wobj`, `displayfunc`), the video layer, the boot, and
+  the sound driver.
 - **Melee's own bring-up runs.** `HSD_AllocateXFB`, `HSD_AllocateFifo` and
   `HSD_InitComponent` — `gmmain.c`'s own lines — carve two framebuffers, a
   graphics fifo and two heaps out of a 24 MiB arena and emit the console's
@@ -66,7 +67,7 @@ reimplemented. The rest of the sequencing still holds.
 - **The SDK callback boundary is decided and implemented**: one thread, an
   exact 675675-tick NTSC field, alarms at their own instant, interrupt masking
   that really defers a handler. Determinism is asserted.
-- **137 test cases** (61 on the port's own HSD, 76 on upstream's) run in CI on
+- **151 test cases** (61 on the port's own HSD, 90 on upstream's) run in CI on
   GCC with sanitizers, Clang, and MSVC.
 - The `bootstrap.cpp` menu flow is still hand-written, and
   `src/melee_port/hsd/` still holds 16 files the runtime uses.
@@ -118,19 +119,24 @@ So the remaining work is not "compile the game". It is three things:
    rather than missing.
 3. **Make it run** — boot order, the frame loop, and the scene flow.
 
-### The one genuinely unmeasured gap: audio
+### Audio · **measured, and smaller than this section first said**
 
 Aurora implements `AR`, `CARD`, `DVD`, `GX`, `MTX`, `OS`, `PAD`, `SI` and
 `VI`. It implements **no `AX`, `AI`, `DSP` or `THP`** — headers only. Melee's
-audio path is HAL's own `axdriver.c` and `synth.c` (both decompiled, both in
-`sysdolphin`) calling **60 distinct `AX` symbols**: voice acquisition, ADPCM
-streaming, mixing, and the reverb, chorus and delay effects.
+audio path is HAL's own `axdriver.c` and `synth.c`, both decompiled and both
+in `sysdolphin`.
 
-`extern/musyx` is vendored, but **Melee does not use MusyX** — zero references
-in the whole decompilation. It belongs to the other port sharing this
-repository. Phase 6 therefore means implementing a GameCube DSP voice mixer,
-or bridging those 60 symbols onto a host audio library. That is the part of
-this plan with no measurement behind its estimate.
+This section used to say "60 distinct `AX` symbols" and call audio the one
+unmeasured gap. Counting references rather than declarations: the game uses
+**19 of `AX`'s 33 entry points, 8 of `AXFX`'s 14 — every one an init or a
+shutdown — 4 of `AI`'s 24, and none at all of `DSP`'s 15**. Three upstream
+units touch the sound SDK, and the whole `AR`/`ARQ` surface they use is
+already Aurora's. `extern/musyx` is vendored for the other port in this
+repository; **Melee references MusyX nowhere**.
+
+Those three units are now in the conformance target and the sound driver
+comes up through its own init. What is left is the voice mixer, and `AXPB` in
+Melee's own bundled `<dolphin/ax.h>` specifies its entire input. See phase 6.
 
 ---
 
@@ -401,7 +407,7 @@ The suite already pins `objalloc`, `class`/`object`, `list`, `id`, `fobj`
 (twelve stream shapes) and `aobj` (seven playback modes) against upstream's
 own behavior, so most of this phase has its acceptance test written already.
 
-**Thirty-eight units have moved**, which is the whole of HSD's scene graph and
+**Forty-one units have moved**, which is the whole of HSD's scene graph and
 most of what stands under it: the object and class model (`objalloc`, `class`,
 `object`, `list`, `id`, `hash`, `memory`), animation (`fobj`, `aobj`,
 `bytecode`, `spline`), the archive loader, the math pools (`mtx`, `quatlib`)
@@ -410,8 +416,8 @@ and utilities (`util`, `random`), the entire render half (`jobj`, `dobj`,
 `shadow`, `robj`, `wobj`, `displayfunc`), and the particle system that owns
 the skinning helper the scene graph builds envelope matrices with (`particle`,
 `generator`, `psappsrt`, `perf`), the video layer and the boot (`fog`,
-`video`, `initialize`). Aurora's matrix and vector implementations link in
-alongside.
+`video`, `initialize`), and the sound driver (`axdriver`, `synth`, `devcom`).
+Aurora's matrix and vector implementations link in alongside.
 
 Running them side by side found a real defect in the port's `ref_DEC`, which
 released a reference one call early whenever more than one was held, and
@@ -422,7 +428,8 @@ the encoding bug that started this cannot come back.
 
 `fog`, `video` and `initialize` have since joined them — the absent SDK
 symbols they needed are supplied, and `initialize` brought the arena with it
-— so **thirty-eight units are in**, and `HSD_InitComponent` runs.
+— so **thirty-eight units are in**, and `HSD_InitComponent` runs.  Phase 6's
+measurement then brought `axdriver`, `synth` and `devcom`, for **forty-one**.
 
 **Two units remain outside, each for a named reason.** `psdisp` asserts that a
 structure holding a pointer is eight bytes, which it is not on a 64-bit host;
@@ -758,37 +765,86 @@ of it is comparatively small. The risk here is not compilation, it is that
 fighter behavior is where a wrong conversion first becomes visible as a
 gameplay difference rather than a crash.
 
-## Phase 6 — Sound
+## Phase 6 — Sound · **measured, and running**
 
 **Objective.** Music and effects.
 
-**The estimate here was wrong and is now corrected.** This plan said "musyx is
-already a submodule", implying the engine was in hand. It is not: `extern/musyx`
-is vendored for the *other* port in this repository, and **Melee references
-MusyX nowhere** — zero hits across 1034 files.
+Two corrections, both from measurement rather than reading.
 
-Melee's audio is HAL's own. `sysdolphin/baselib/axdriver.c` and `synth.c` are
-decompiled and present, and they call **60 distinct `AX` symbols**: voice
-acquisition and release, ADPCM streaming with loop points, per-voice mixing
-and volume envelopes, sample-rate conversion, and the four effect chains
-(reverb standard, reverb high, chorus, delay). Aurora implements none of
-them — `ai.h`, `dsp.h` and `thp.h` are headers with nothing behind them.
+**The first estimate was wrong about the engine.** This plan said "musyx is
+already a submodule", implying it was in hand. `extern/musyx` is vendored for
+the *other* port in this repository, and **Melee references MusyX nowhere** —
+zero hits across 1034 files. Melee's audio is HAL's own, on top of the SDK's
+`AX`.
 
-So this phase is one of:
+**The second estimate was wrong about the size, in the other direction.** It
+said 60 distinct `AX` symbols with nothing behind them, and called this the
+one part of the plan with no measurement. Counting what the game actually
+references, rather than what its headers declare:
 
-- implement the GameCube DSP voice mixer those 60 symbols describe, against a
-  host audio callback; or
-- bridge them onto an existing implementation (Dolphin's DSP-HLE is the
-  reference, and its licence and shape would have to be examined first).
+| Library | Declared | Referenced by the game |
+|---|---|---|
+| `AX` | 33 | **19** |
+| `AXFX` | 14 | **8**, all of them init or shutdown |
+| `AI` | 24 | **4** |
+| `DSP` | 15 | **0** |
+| `AR`/`ARQ` | 19 | 6 — **all already implemented by Aurora** |
+
+**Three upstream units touch the sound SDK at all**: `axdriver.c`, `synth.c`
+and `melee/lb/lbaudio_ax.c`. The DSP library is referenced nowhere, because
+`AX` talks to the DSP on the game's behalf. `AXFX` is only ever initialized
+and shut down — the game never calls an effect per frame — so a dry-only
+implementation is complete for everything the game can observe, and the
+consequence is bounded to one sentence: the wet path is silent.
+
+And the interface is fully specified where it matters. `AXPB` in Melee's own
+bundled `<dolphin/ax.h>` is the complete per-voice DSP state: sample address
+and format, loop points, ADPCM coefficients and predictor, the resampling
+ratio with its four history samples, the volume envelope, and a twenty-field
+mixer with per-target volumes and deltas. Nothing about it is opaque, so a
+host mixer is a bounded job — decode, resample, apply the envelope,
+accumulate — rather than an open question about microcode.
+
+**`axdriver.c`, `synth.c` and `devcom.c` are now in the conformance target,
+and upstream's own sound driver comes up through its own init.**
+`tests/hsd/ax_record.cpp` is the AX surface — 35 entry points, each recording
+a line and, where the game reads the voice block back, maintaining it —
+and `src/melee_port/upstream/aram.cpp` is the auxiliary RAM the sound banks
+live in. Running Melee's own bring-up (`ARInit`, `ARQInit`, `AIInit`,
+`AXDriver_8038E498`) produces a seven-call AX transcript, three ARAM blocks
+in the console's layout, and a queued DMA.
+
+The ARAM queue is where the game corrected the port a second time, and it is
+worth recording. `ARQPostRequest` first completed its transfer and ran its
+callback inline, on the reasoning that a finished transfer is the easiest
+thing for a test to reason about. Upstream crashed on it:
+`HSD_DevComARAMWakeUp` posts a request and *then* advances its own
+bookkeeping — `aramDC->dest += xfer_size` on the very next line — and the
+callback had already unlinked `aramDC`. On the console that cannot happen,
+because ARQ completes at a DMA interrupt, strictly after the post returns. So
+a posted request is queued, and completion is delivered as an interrupt —
+held off while interrupts are masked, exactly as the alarm scheduler holds an
+alarm off. A test pins that directly.
+
+What remains for this phase, and it is now the whole of it:
+
+- **the mixer.** Read the `AXPB` of each held voice once per AX frame, fetch
+  from ARAM, decode ADPCM (or PCM8/PCM16), resample by the 16.16 ratio using
+  the four-sample history, apply the volume envelope and its delta, and
+  accumulate into left, right and surround plus the two auxiliary buses. Then
+  drive the registered frame callback, and hand the result to Aurora's audio
+  output. Dolphin's DSP-HLE is the reference for the arithmetic, and its
+  licence and shape would have to be examined before borrowing any of it;
+- **the disc**, for the banks themselves. `synth.c` loads them through
+  `devcom.c`, which opens a file and streams it into ARAM — the conformance
+  target declines the open, because it has no disc by design.
 
 **Done when** menu music, stage music, and hit effects play in sync with the
 simulation.
 
-**Size.** Medium to large, and **the only part of this plan with no
-measurement behind its estimate**. It should be spiked before it is
-scheduled: implement `AXAcquireVoice`, `AXSetVoiceAddr`, `AXSetVoiceAdpcm`,
-`AXSetVoiceVe` and `AXSetVoiceMix` well enough to play one sound effect from
-one Melee bank, and let that tell the real number.
+**Size.** Small for the boundary, which is done, and medium for the mixer —
+one component with a fully specified input, not a subsystem port. The
+estimate now has a measurement behind it.
 
 ## Phase 7 — Everything else
 
@@ -857,13 +913,15 @@ ever. A legally obtained disc image is a runtime input.
    than during fighter bring-up. The recorder makes this cheap and it already
    works; what it also showed is that some of what the console drew was never
    determinate in the first place — see *Golden frames* above.
-2. **Audio, and it is now the top unmeasured risk.** Aurora implements no
-   `AX`, `AI`, `DSP` or `THP` — headers only — and Melee's decompiled audio
-   driver calls 60 distinct `AX` symbols. The mitigation this plan used to
-   name was wrong: `extern/musyx` belongs to the other port in this
-   repository and Melee references it nowhere. Mitigation: spike five `AX`
-   voice calls against one Melee sound bank and let that produce the estimate,
-   before phase 6 is scheduled at all.
+2. ~~**Audio, the top unmeasured risk.**~~ **Measured, and reduced.** The
+   spike this entry called for was overtaken by counting the boundary: 19 `AX`
+   entry points, 8 `AXFX`, 4 `AI`, no `DSP` at all, and every `AR`/`ARQ` call
+   already Aurora's. `axdriver.c`, `synth.c` and `devcom.c` now compile, link
+   and run against a recording AX. What is left is a voice mixer whose input
+   — `AXPB` — is fully specified in Melee's own headers. The residual risk is
+   fidelity, not feasibility: a mixer that decodes or resamples slightly
+   differently from the console's DSP sounds slightly wrong, and there is no
+   golden audio to compare against the way there is a golden GX trace.
 3. ~~**The threading model.**~~ **Retired.** The risk assumed a choice that
    does not exist: the game creates no threads, so there is no scheduling for
    the rest of the port to inherit. What replaced it is a callback scheduler
@@ -893,18 +951,21 @@ ever. A legally obtained disc image is a runtime input.
 ## The next three actions
 
 Phase 0 is done, **phase 1 is done** — upstream's own `HSD_InitComponent`
-runs, and the port boots the console's opening frame — and phase 2's
-mechanism is built. These are what follow, in order.
+runs, and the port boots the console's opening frame — phase 2's mechanism is
+built and every structure Melee's archives hold converts, and **phase 6's
+boundary is measured and running**. These are what follow, in order.
 
 1. **Load `MnMaAll.dat` from the disc and draw it with upstream's renderer**
    (phase 3). Everything it needs now exists: the archive reader, the
-   converters, the scene graph, the camera, a booted HSD, and the recorder to
-   compare against. This is the step that proves the approach end to end, and
-   it is the first frame a person could look at.
-2. **Spike five `AX` voice calls against one Melee sound bank** (phase 6, out
-   of order deliberately). Audio is the only estimate in this plan with no
-   measurement behind it, and it is cheaper to learn that now than after
-   phase 5.
+   converters for all twenty-six structures, the scene graph, the camera, a
+   booted HSD, and the recorder to compare against. This is the step that
+   proves the approach end to end, and it is the first frame a person could
+   look at. It is also what settles the one layout question left open — the
+   shape of the camera, light and fog lists a scene root points at.
+2. **Write the voice mixer** (phase 6). The boundary is closed and the input
+   is specified: read each held voice's `AXPB` once per AX frame, fetch from
+   ARAM, decode, resample by the 16.16 ratio, apply the envelope, accumulate
+   into the five buses, drive the frame callback, hand the result to Aurora.
 3. **Attack the 32 struct-layout assertions** (phase 2) — the shopping list of
    places where a 64-bit pointer makes upstream's own `sizeof` check fail.
 

@@ -261,6 +261,36 @@ order.
       takes, the weights cancel and the result is the zero quaternion.  It is
       asserted as such: a reimplementation that corrected it would diverge
       from the disc;
+- [x] measure the audio boundary instead of spiking it, and bring the sound
+      driver over.  The plan's estimate said 60 `AX` symbols and called audio
+      its one unmeasured risk; counting references rather than declarations
+      gives **19 of `AX`'s 33 entry points, 8 of `AXFX`'s 14 -- every one an
+      init or a shutdown -- 4 of `AI`'s 24, and none at all of `DSP`'s 15**,
+      across exactly three upstream units (`axdriver.c`, `synth.c`,
+      `melee/lb/lbaudio_ax.c`).  The game never queues a DSP task, because
+      `AX` does that for it, and the whole `AR`/`ARQ` surface it uses is
+      already implemented by Aurora.  So `tests/hsd/ax_record.cpp` supplies
+      the 35 AX and AXFX entry points -- recording each call and, where
+      `synth.c` reads the voice block back (`pb.state`,
+      `pb.addr.currentAddressHi`, `pb.itd`), maintaining it the way the SDK's
+      setters do -- and `src/melee_port/upstream/aram.cpp` supplies the
+      auxiliary RAM.  `axdriver`, `synth` and `devcom` now compile and run,
+      for **forty-one upstream units**: Melee's own audio bring-up
+      (`ARInit`, `ARQInit`, `AIInit`, `AXDriver_8038E498`) produces a
+      seven-call AX transcript, three ARAM blocks in the console's layout,
+      and a queued DMA.  What remains of phase 6 is the mixer, and `AXPB` in
+      Melee's bundled `<dolphin/ax.h>` specifies its entire input;
+- [x] make an ARAM transfer complete at an interrupt rather than inside
+      `ARQPostRequest`, because upstream crashed on the first version.
+      `HSD_DevComARAMWakeUp` posts a request and *then* advances its own
+      bookkeeping -- `aramDC->dest += xfer_size` on the next line -- and an
+      inline callback had already unlinked `aramDC`.  On the console a DMA
+      completes at an interrupt, strictly after the post returns, so a posted
+      request is queued and `service_aram_queue()` delivers it -- held off
+      while interrupts are masked, exactly as the alarm scheduler holds an
+      alarm off.  That is the second time the game has corrected a design
+      decision in this port, and both times it did so by crashing on the
+      difference rather than by drifting quietly;
 - [x] convert the scene around the model: `HSD_CObjDesc`, `HSD_WObjDesc`,
       `HSD_LightDesc` and `HSD_FogDesc`.  The camera's assertion is
       differential rather than field-by-field -- the same camera built by hand

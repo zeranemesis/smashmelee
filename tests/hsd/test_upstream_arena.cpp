@@ -274,15 +274,22 @@ MELEE_TEST(UpstreamBoot, CarvesTheConsolesHeapsOutOfTheArena)
     CHECK_EQ(HSD_Synth_804D6018, 0);
     CHECK_EQ(HSD_GetHeap(), 1);
 
-    // The audio heap is the default size, less its own cell header.
-    const s32 audio_free = OSCheckHeap(HSD_Synth_804D6018);
-    CHECK_EQ(audio_free, (s32) HSD_DEFAULT_AUDIO_SIZE - 32);
+    // The audio heap is the default size, less its own cell header.  The
+    // figures are the ones the boot produced rather than the ones still
+    // free: the audio driver allocates out of both heaps, and its cases run
+    // before this one.
+    CHECK_EQ(meleeboard::test::boot_audio_heap_free(),
+             (int) HSD_DEFAULT_AUDIO_SIZE - 32);
 
     // The main heap is everything the framebuffers, the graphics fifo and the
     // audio heap did not take.  24 MiB in, a little over 22 MiB out.
-    const s32 main_free = OSCheckHeap(HSD_GetHeap());
+    const int main_free = meleeboard::test::boot_main_heap_free();
     CHECK(main_free > 22 * 1024 * 1024);
     CHECK(main_free < 23 * 1024 * 1024);
+
+    // And both are still consistent after whatever has allocated from them.
+    CHECK(OSCheckHeap(HSD_Synth_804D6018) >= 0);
+    CHECK(OSCheckHeap(HSD_GetHeap()) >= 0);
 
     // And the arena is spent: HSD_OSInit's last act is to hand what is left
     // to the heap and set arenaLo to arenaHi.

@@ -101,15 +101,15 @@ add_test(NAME melee_hsd_tests COMMAND melee_hsd_tests)
 # exercised continuously rather than in one step at the end.  The two binaries
 # cannot be one: both implementations define HSD_ObjAlloc.
 #
-# Thirty-eight units have moved, which is the whole of HSD's scene graph and
+# Forty-one units have moved, which is the whole of HSD's scene graph and
 # most of what stands under it: the object and class model (objalloc, class,
 # object, list, id, hash, memory), animation (fobj, aobj, bytecode, spline),
 # the archive loader, the math pools (mtx, quatlib) and utilities (util,
 # random), the entire render half (jobj, dobj, mobj, pobj, tobj, cobj, lobj,
 # tev, texp, texpdag, state, shadow, robj, wobj, displayfunc), and the
 # particle system that shares the skinning helper with it (particle,
-# generator, psappsrt, perf), and the video layer and boot (fog, video,
-# initialize).
+# generator, psappsrt, perf), the video layer and boot (fog, video,
+# initialize), and the sound driver (axdriver, synth, devcom).
 #
 # The render half arrives because gx_record.cpp gives it a GX to talk to: 84
 # entry points that append a line to a trace instead of drawing.  That is not
@@ -126,6 +126,13 @@ add_test(NAME melee_hsd_tests COMMAND melee_hsd_tests)
 # an arena into HSD's heaps, and os_arena.cpp gives it a real one to carve.
 # Running HSD_InitComponent end to end is the first time the port executes
 # upstream's own boot sequence rather than a test's approximation of it.
+#
+# The sound driver is in for the same reason the render half was: it has a
+# surface to talk to.  ax_record.cpp implements the 35 AX and AXFX entry
+# points the three audio units reference between them -- the whole boundary,
+# because measuring it found the DSP library referenced nowhere and every
+# ARAM call already Aurora's -- and aram.cpp supplies the auxiliary RAM the
+# sound banks live in.
 #
 # Aurora's matrix and vector implementations are linked in alongside: mtx.c
 # calls the SDK math, and Aurora macro-aliases the unprefixed MTX* spellings
@@ -176,6 +183,9 @@ else ()
             sysdolphin/baselib/fog
             sysdolphin/baselib/video
             sysdolphin/baselib/initialize
+            sysdolphin/baselib/axdriver
+            sysdolphin/baselib/synth
+            sysdolphin/baselib/devcom
             sysdolphin/baselib/bytecode
             # The particle system, which owns the skinning helper jobj and
             # dobj build envelope matrices with.
@@ -187,12 +197,14 @@ else ()
     add_executable(melee_hsd_upstream_tests
             ${CMAKE_CURRENT_LIST_DIR}/harness.cpp
             ${CMAKE_CURRENT_LIST_DIR}/dat_builder.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/ax_record.cpp
             ${CMAKE_CURRENT_LIST_DIR}/gx_record.cpp
             ${CMAKE_CURRENT_LIST_DIR}/gx_texture_stub.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_convert.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_scheduler.cpp
             ${CMAKE_CURRENT_LIST_DIR}/upstream_boot.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_arena.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test_upstream_audio.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_scene.cpp
             # The archive reader and the converter that builds host-sized
             # structures from it.  Neither defines an HSD symbol, so unlike
@@ -202,6 +214,7 @@ else ()
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/descriptor_arena.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/os_scheduler.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/os_arena.cpp
+            ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/aram.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/vi_bridge.cpp
             ${MELEE_HSD_TESTS_ROOT}/src/melee_port/upstream/gx_array_registry.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test_upstream_core.cpp

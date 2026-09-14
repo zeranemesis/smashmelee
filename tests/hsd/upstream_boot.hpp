@@ -35,4 +35,11 @@ const std::vector<std::string>& boot_gx_trace();
 // returned them: HSD_VI_XFB_MAX entries, the unused ones null.
 void* const* boot_frame_buffers();
 
+// The free space in the two heaps HSD_OSInit carved, read immediately after
+// the boot.  Later cases allocate out of both, so the figures a test asserts
+// on have to be the ones the boot produced rather than the ones that survive
+// whichever case ran first.
+int boot_audio_heap_free();
+int boot_main_heap_free();
+
 } // namespace meleeboard::test

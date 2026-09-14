@@ -6,6 +6,7 @@
 
 extern "C" {
 #include <sysdolphin/baselib/initialize.h>
+#include <sysdolphin/baselib/synth.h>
 }
 
 #include "gx_record.hpp"
@@ -19,6 +20,8 @@ namespace {
 bool g_booted = false;
 std::vector<std::string> g_boot_trace;
 void** g_frame_buffers = nullptr;
+int g_audio_heap_free = -1;
+int g_main_heap_free = -1;
 
 void run_boot()
 {
@@ -47,6 +50,8 @@ void run_boot()
     HSD_InitComponent();
 
     g_boot_trace = gx::trace();
+    g_audio_heap_free = OSCheckHeap(HSD_Synth_804D6018);
+    g_main_heap_free = OSCheckHeap(HSD_GetHeap());
 }
 
 } // namespace
@@ -56,6 +61,10 @@ void boot_hsd() { run_boot(); }
 const std::vector<std::string>& boot_gx_trace() { return g_boot_trace; }
 
 void* const* boot_frame_buffers() { return g_frame_buffers; }
+
+int boot_audio_heap_free() { return g_audio_heap_free; }
+
+int boot_main_heap_free() { return g_main_heap_free; }
 
 namespace {
 
