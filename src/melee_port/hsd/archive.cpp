@@ -192,7 +192,7 @@ std::optional<uint32_t> Archive::data_pointer(uint32_t field_offset) const
         return pointer;
     }
     if (*pointer == 0) {
-        return uint32_t{ 0 };
+        return kNullOffset;
     }
     return std::nullopt;
 }
@@ -209,6 +209,15 @@ std::optional<uint8_t> Archive::data_byte(uint32_t data_offset) const
         return std::nullopt;
     }
     return bytes_[kHeaderSize + data_offset];
+}
+
+std::optional<Archive::DataSpan> Archive::data_span(uint32_t data_offset) const
+{
+    if (!contains_data_range(data_offset, 0)) {
+        return std::nullopt;
+    }
+    return DataSpan{ bytes_.data() + kHeaderSize + data_offset,
+                     data_size_ - data_offset };
 }
 
 std::optional<float> Archive::data_float(uint32_t data_offset) const
@@ -245,7 +254,7 @@ std::optional<SceneRoots> Archive::scene_roots(std::string_view symbol) const
     scene.fogs = *fogs;
 
     const auto valid_data_pointer = [this](uint32_t pointer) {
-        return pointer == 0 || pointer < data_size_;
+        return pointer == kNullOffset || pointer < data_size_;
     };
     if (!valid_data_pointer(scene.models) || !valid_data_pointer(scene.cameras) ||
         !valid_data_pointer(scene.lights) || !valid_data_pointer(scene.fogs)) {
@@ -261,7 +270,7 @@ std::optional<uint32_t> Archive::scene_model_count(
     if (!scene.has_value()) {
         return std::nullopt;
     }
-    if (scene->models == 0) {
+    if (scene->models == kNullOffset) {
         return 0;
     }
 
@@ -278,7 +287,7 @@ std::optional<uint32_t> Archive::scene_model_count(
         if (!model.has_value()) {
             return std::nullopt;
         }
-        if (*model == 0) {
+        if (*model == kNullOffset) {
             return index;
         }
         if (data_size_ < kDynamicModelDescSize ||
@@ -287,6 +296,35 @@ std::optional<uint32_t> Archive::scene_model_count(
         }
     }
     return std::nullopt;
+}
+
+std::optional<std::vector<uint32_t>> Archive::scene_model_joints(
+    std::string_view symbol) const
+{
+    const auto scene = scene_roots(symbol);
+    const auto model_count = scene_model_count(symbol);
+    if (!scene.has_value() || !model_count.has_value()) {
+        return std::nullopt;
+    }
+
+    std::vector<uint32_t> joints;
+    joints.reserve(*model_count);
+    for (uint32_t index = 0; index < *model_count; ++index) {
+        const auto model =
+            data_pointer(scene->models + index * sizeof(uint32_t));
+        if (!model.has_value() || data_size_ < kDynamicModelDescSize ||
+            *model > data_size_ - kDynamicModelDescSize) {
+            return std::nullopt;
+        }
+        const auto joint = data_pointer(*model);
+        if (!joint.has_value()) {
+            return std::nullopt;
+        }
+        if (*joint != kNullOffset) {
+            joints.push_back(*joint);
+        }
+    }
+    return joints;
 }
 
 std::optional<uint32_t> Archive::scene_joint_count(std::string_view symbol) const
@@ -308,7 +346,7 @@ std::optional<uint32_t> Archive::scene_joint_count(std::string_view symbol) cons
         if (!joint.has_value()) {
             return std::nullopt;
         }
-        if (*joint != 0) {
+        if (*joint != kNullOffset) {
             pending.push_back(*joint);
         }
     }
@@ -330,10 +368,10 @@ std::optional<uint32_t> Archive::scene_joint_count(std::string_view symbol) cons
         if (!child.has_value() || !next.has_value()) {
             return std::nullopt;
         }
-        if (*child != 0) {
+        if (*child != kNullOffset) {
             pending.push_back(*child);
         }
-        if (*next != 0) {
+        if (*next != kNullOffset) {
             pending.push_back(*next);
         }
     }
@@ -363,8 +401,8 @@ std::optional<uint32_t> Archive::joint_tree_count(std::string_view symbol) const
         if (!child.has_value() || !sibling.has_value()) {
             return std::nullopt;
         }
-        if (*child != 0) pending.push_back(*child);
-        if (*sibling != 0) pending.push_back(*sibling);
+        if (*child != kNullOffset) pending.push_back(*child);
+        if (*sibling != kNullOffset) pending.push_back(*sibling);
     }
     return static_cast<uint32_t>(visited.size());
 }

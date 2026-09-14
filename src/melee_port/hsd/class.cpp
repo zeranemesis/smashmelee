@@ -240,6 +240,10 @@ bool hsdIsDescendantOf(HSD_ClassInfo* info, HSD_ClassInfo* parent)
     return false;
 }
 
+// A host addition.  Upstream's hsdSearchClassInfo reads a hash that nothing in
+// the decompilation ever populates, so it always returns NULL and no game code
+// can depend on a result; this walks the registered tree instead, which is
+// useful for diagnostics but is not console behavior.
 HSD_ClassInfo* hsdSearchClassInfo(const char* class_name)
 {
     if (class_name == nullptr) {

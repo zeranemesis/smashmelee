@@ -23,7 +23,31 @@ The first porting milestone is implemented:
 - a host-width-safe HSD object allocator, root class/object model, GObj
   scheduler, and logical GX frame setup are compiled and self-tested at startup.
 
-This is not gameplay-ready yet. HSD integration has started; the next milestone is scene initialization, followed by Melee's scene system. See [docs/MELEE_PORT.md](docs/MELEE_PORT.md).
+This is not gameplay-ready yet. HSD integration has started; the next milestone is scene initialization, followed by Melee's scene system. [docs/PLAN.md](docs/PLAN.md) is the sequenced plan from here to a running game, and [docs/MELEE_PORT.md](docs/MELEE_PORT.md) records what each porting step established.
+
+## Tests
+
+The HSD core builds against headers alone, so its regression suite needs no
+GPU, no Aurora library, and no disc image:
+
+```sh
+cmake -S tests/hsd -B build/hsd-tests
+cmake --build build/hsd-tests
+ctest --test-dir build/hsd-tests --output-on-failure
+```
+
+It runs in CI on GCC (with sanitizers), Clang, and MSVC. Every change to the
+HSD decoders should come with a case there.
+
+`ctest` runs two binaries. `melee_hsd_tests` covers the port's own HSD;
+`melee_hsd_upstream_tests` compiles the units that have been moved over to
+`doldecomp/melee`'s own sources and drives them through the same behavioral
+assertions, so the swap described in [docs/PLAN.md](docs/PLAN.md) is
+exercised continuously. The second needs the upstream submodule:
+
+```sh
+git submodule update --init --depth 1 extern/melee
+```
 
 ## Source reference
 

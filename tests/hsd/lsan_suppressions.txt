@@ -1,0 +1,11 @@
+# Upstream's HSD object allocator never returns pool memory.
+#
+# HSD_ObjAllocAddFree takes a pool from HSD_MemAlloc and links its objects
+# into a free list; nothing gives it back.  There is no counterpart to the
+# port's HSD_ObjAllocShutdown, and _HSD_ObjAllocForgetMemory only drops the
+# list head.  On the console the HSD heap is never returned either, so this is
+# the allocator behaving as designed rather than a defect to fix.
+#
+# The suppression is scoped to that one allocation site, so a leak anywhere
+# else -- in the port's allocator, or in the test code -- still fails the run.
+leak:OSAllocFromHeap

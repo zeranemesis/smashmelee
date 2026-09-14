@@ -112,6 +112,7 @@ option(USE_ASAN "Enable address sanitization" OFF)
 option(SKIP_HU_ALLOC "Skip the game's built in allocator" OFF)
 option(RUNTIME_SANITIZE "Runtime (stack) sanitization" OFF)
 option(MELEE_BOOTSTRAP "Build the Melee PC bootstrap instead of Mario Party 4 game_main" ON)
+option(MELEE_BUILD_TESTS "Build the offline HSD regression suite" ON)
 
 set(AURORA_ENABLE_DVD ON)
 set(AURORA_ENABLE_RMLUI ON CACHE BOOL "Enable RmlUi UI support" FORCE)
@@ -197,6 +198,13 @@ target_link_libraries(partyboard PRIVATE dol aurora::main)
 aurora_copy_runtime_dlls(partyboard dol)
 
 list(APPEND BINARY_TARGETS partyboard dol)
+
+if (MELEE_BUILD_TESTS)
+    # A self-contained target: it compiles the HSD sources against headers
+    # only, so it neither links Aurora nor needs a disc image.  It can also be
+    # configured on its own, which is what CI does to keep the suite fast.
+    add_subdirectory(tests/hsd)
+endif ()
 
 if (NOT MELEE_BOOTSTRAP)
     set(REL_TARGETS "")

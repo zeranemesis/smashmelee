@@ -10,11 +10,13 @@
 
 namespace meleeboard::hsd {
 
+// Data-section offsets of a SceneDesc's four root arrays.  An absent array
+// reads back as Archive::kNullOffset, never as offset zero.
 struct SceneRoots {
-    uint32_t models = 0;
-    uint32_t cameras = 0;
-    uint32_t lights = 0;
-    uint32_t fogs = 0;
+    uint32_t models = UINT32_MAX;
+    uint32_t cameras = UINT32_MAX;
+    uint32_t lights = UINT32_MAX;
+    uint32_t fogs = UINT32_MAX;
 };
 
 // A read-only view of Melee's big-endian HSD DAT container.  Relocation is
@@ -37,17 +39,61 @@ public:
     bool contains_data_range(uint32_t data_offset, uint32_t byte_count) const;
     std::optional<uint8_t> data_byte(uint32_t data_offset) const;
     std::optional<uint32_t> data_word(uint32_t data_offset) const;
+    // The offset data_pointer() reports for a NULL field.  HSD stores NULL as
+    // a zero word that the loader leaves out of the relocation table, while a
+    // relocated zero addresses the first byte of the data section.  A host
+    // that keeps offsets rather than addresses must not conflate the two, so
+    // NULL gets a value no data section can contain.
+    static constexpr uint32_t kNullOffset = UINT32_MAX;
+
     // Reads an on-disc pointer field as an offset in the HSD data section.
     // A zero offset is valid when the field is listed in the relocation table:
     // the original HSD loader adds the data-section base to every relocation
     // field, including one whose stored value is zero.  A zero word outside
-    // the relocation table is a null pointer.  Non-null unrelocated values
-    // are not safe host data pointers and are rejected.
+    // the relocation table is a null pointer and reads back as kNullOffset.
+    // Non-null unrelocated values are not safe host data pointers and are
+    // rejected.
     std::optional<uint32_t> data_pointer(uint32_t field_offset) const;
     std::optional<float> data_float(uint32_t data_offset) const;
+
+    // The bytes at `data_offset`, addressed directly, and how many of them
+    // remain before the data section ends.
+    //
+    // This is the one place the archive hands out an address, and it is safe
+    // for exactly one thing: raw data that is not a structure -- a vertex
+    // array, a display list, a texture image, a string.  Those have no
+    // pointers in them, so their size and meaning do not change on a 64-bit
+    // host, and the GPU can read them where they lie.  Anything with a
+    // pointer field has to be converted instead; see
+    // src/melee_port/upstream/archive_convert.hpp.
+    //
+    // The bytes stay in the console's byte order.  A caller that hands them
+    // to the host's GX has to say so -- which is what Aurora's GXSetArray
+    // takes a little-endian flag for.
+    struct DataSpan {
+        const unsigned char* bytes = nullptr;
+        uint32_t remaining = 0;
+    };
+    std::optional<DataSpan> data_span(uint32_t data_offset) const;
     std::optional<SceneRoots> scene_roots(std::string_view symbol) const;
     std::optional<uint32_t> scene_model_count(std::string_view symbol) const;
     std::optional<uint32_t> scene_joint_count(std::string_view symbol) const;
+
+    // The root joint of each model in the scene at `symbol`, in scene order.
+    //
+    // This is the model half of a scene, and the one composable piece of it:
+    // the models list is a NULL-terminated array of pointers to model
+    // descriptors whose first field is the joint, a layout validated against
+    // GALE01's own MnMaAll.dat.  Hand each offset to
+    // ArchiveConverter::joint() and the scene's geometry is built.
+    //
+    // The camera, light and fog lists in the same scene root do not have an
+    // accessor here, and deliberately: their array shape has not been checked
+    // against a real archive, and guessing it would be the one kind of
+    // mistake this port has been avoiding.  Those descriptors convert one
+    // offset at a time until a disc says how they are arranged.
+    std::optional<std::vector<uint32_t>> scene_model_joints(
+        std::string_view symbol) const;
     std::optional<uint32_t> joint_tree_count(std::string_view symbol) const;
 
 private:

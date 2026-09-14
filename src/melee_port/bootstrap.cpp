@@ -316,11 +316,11 @@ extern "C" int game_main(void)
     }
     MeleeBootstrapLog.debug("standScene materialization complete");
     if (!meleeboard::hsd::initialize_host_runtime()) {
-        MeleeBootstrapLog.error("HSD host runtime self-test failed");
+        MeleeBootstrapLog.error("Could not initialize the HSD host runtime");
         meleeboard::disc::unmount();
         return 1;
     }
-    MeleeBootstrapLog.debug("HSD host runtime self-test complete");
+    MeleeBootstrapLog.debug("HSD host runtime initialized");
     meleeboard::hsd::HostAnimationPlayer menu_player;
     meleeboard::hsd::HostAnimationPlayer menu_panel_player;
     meleeboard::hsd::HostAnimationPlayer menu_content_player;

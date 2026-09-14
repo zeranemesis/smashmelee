@@ -53,7 +53,7 @@ bool load_aobj(const Archive& archive, uint32_t offset, HostAnimationObject& obj
 
     uint32_t channel_offset = *first_channel;
     std::unordered_set<uint32_t> visited;
-    while (channel_offset != 0) {
+    while (channel_offset != Archive::kNullOffset) {
         if (object.channels.size() >= kMaxAnimationChannels ||
             !visited.insert(channel_offset).second ||
             !archive.contains_data_range(channel_offset, kFObjDescSize)) {
@@ -143,7 +143,7 @@ bool HostAnimation::load_internal(const Archive& archive, uint32_t root_offset)
         HostAnimationJoint joint{};
         joint.source_offset = offset;
         joint.flags = *flags;
-        joint.has_object = *object != 0;
+        joint.has_object = *object != Archive::kNullOffset;
         if (joint.has_object && !load_aobj(archive, *object, joint.object)) {
             last_error_ = "animation object or FObj descriptor is malformed";
             joints_.clear();
@@ -151,10 +151,10 @@ bool HostAnimation::load_internal(const Archive& archive, uint32_t root_offset)
         }
         indices.emplace(offset, static_cast<uint32_t>(joints_.size()));
         joints_.push_back(std::move(joint));
-        if (*child != 0) {
+        if (*child != Archive::kNullOffset) {
             pending.push_back(*child);
         }
-        if (*sibling != 0) {
+        if (*sibling != Archive::kNullOffset) {
             pending.push_back(*sibling);
         }
     }
@@ -167,7 +167,7 @@ bool HostAnimation::load_internal(const Archive& archive, uint32_t root_offset)
             joints_.clear();
             return false;
         }
-        if (*child != 0) {
+        if (*child != Archive::kNullOffset) {
             const auto iterator = indices.find(*child);
             if (iterator == indices.end()) {
                 last_error_ = "animation child is outside hierarchy";
@@ -176,7 +176,7 @@ bool HostAnimation::load_internal(const Archive& archive, uint32_t root_offset)
             }
             joint.child = static_cast<int32_t>(iterator->second);
         }
-        if (*sibling != 0) {
+        if (*sibling != Archive::kNullOffset) {
             const auto iterator = indices.find(*sibling);
             if (iterator == indices.end()) {
                 last_error_ = "animation sibling is outside hierarchy";
